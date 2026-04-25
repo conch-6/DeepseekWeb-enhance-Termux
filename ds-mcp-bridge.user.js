@@ -335,6 +335,8 @@
 
     try {
       toast(`调用工具: ${toolName}...`, 'info');
+      injectChatMessage(`🔧 正在调用 ${toolName}...`, 'pending');
+
       const result = await client.callTool(toolName, args);
       const resultText = result?.content?.[0]?.text || '(no result)';
       const isError = result?.isError;
@@ -342,15 +344,131 @@
       record.status = isError ? 'error' : 'success';
       record.result = resultText;
 
+      // Show result in chat UI
+      const prefix = isError ? '❌ 工具错误' : '✅ 工具结果';
+      injectChatMessage(`${prefix} (${toolName}):\n${resultText}`, isError ? 'error' : 'success');
+
       toast(`${isError ? '失败' : '成功'}: ${toolName}`, isError ? 'error' : 'success');
       console.log(`${SCRIPT_PREFIX} Tool result (${toolName}):`, resultText.substring(0, 500));
+
+      // Auto-send result back to DeepSeek for continued reasoning
+      if (!isError) {
+        autoSendResult(toolName, resultText);
+      }
 
     } catch (e) {
       record.status = 'error';
       record.result = e.message;
+      injectChatMessage(`❌ 工具调用失败 (${toolName}): ${e.message}`, 'error');
       toast(`工具调用失败: ${e.message}`, 'error');
       console.error(`${SCRIPT_PREFIX} Tool error:`, e);
     }
+  }
+
+  // ── Show tool result in chat UI ──
+  function injectChatMessage(text, type = 'info') {
+    const colors = {
+      pending: { bg: '#1a2a4a', border: '#2a4a6a', color: '#7aa2f7' },
+      success: { bg: '#0d2818', border: '#1a4a2a', color: '#6ee7b7' },
+      error:   { bg: '#2d0f0f', border: '#4a1a1a', color: '#fca5a5' },
+      info:    { bg: '#1a1a2e', border: '#2a2a3e', color: '#ccc' },
+    };
+    const c = colors[type] || colors.info;
+
+    const div = document.createElement('div');
+    div.className = 'dse-chat-message';
+    div.style.cssText = `
+      margin: 8px auto; padding: 12px 16px; border-radius: 10px;
+      background: ${c.bg}; border: 1px solid ${c.border};
+      color: ${c.color}; font-size: 13px; font-family: system-ui;
+      white-space: pre-wrap; word-break: break-word;
+      max-width: 720px; width: fit-content;
+    `;
+    div.textContent = text;
+
+    // Insert at the bottom of the chat message area
+    // DeepSeek renders messages in a scrollable container
+    const chatArea = findChatContainer();
+    if (chatArea) {
+      chatArea.appendChild(div);
+      // Scroll to bottom
+      chatArea.scrollTop = chatArea.scrollHeight;
+    } else {
+      // Fallback: append to body
+      document.body.appendChild(div);
+    }
+    console.log(`${SCRIPT_PREFIX} Chat message injected (${type})`);
+  }
+
+  function findChatContainer() {
+    // Try multiple selectors for DeepSeek's chat message area
+    // The container is typically a scrollable div that holds all messages
+    const candidates = document.querySelectorAll('[class*="chat"] > div, [class*="message"] > div, main > div');
+    for (const el of candidates) {
+      // Heuristic: the chat container has many children (messages) and is scrollable
+      if (el.children.length > 2 && el.scrollHeight > el.clientHeight + 50) {
+        return el;
+      }
+    }
+    // Fallback: find any element that looks like it contains messages
+    const scrollable = document.querySelectorAll('div');
+    for (const el of scrollable) {
+      const style = getComputedStyle(el);
+      if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+        if (el.scrollHeight > 400 && el.children.length > 1) {
+          return el;
+        }
+      }
+    }
+    return null;
+  }
+
+  // ── Auto-send tool result back to DeepSeek ──
+  function autoSendResult(toolName, resultText) {
+    // Wait a moment for the UI to settle, then type + send
+    setTimeout(() => {
+      const msg = `[MCP 工具结果 - ${toolName}]\n${resultText}\n\n请基于以上结果继续回答。`;
+
+      // Find the chat input (textarea or contenteditable div)
+      const textarea = document.querySelector('textarea');
+      if (textarea) {
+        // Set value using native setter to trigger React state update
+        const nativeSet = Object.getOwnPropertyDescriptor(
+          window.HTMLTextAreaElement.prototype, 'value'
+        )?.set;
+        if (nativeSet) {
+          nativeSet.call(textarea, msg);
+          textarea.dispatchEvent(new Event('input', { bubbles: true }));
+          textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        } else {
+          textarea.value = msg;
+          textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        console.log(`${SCRIPT_PREFIX} Textarea filled, looking for send button...`);
+
+        // Find and click the send button
+        setTimeout(() => {
+          // Try multiple selectors for the send button
+          const btns = document.querySelectorAll('button');
+          for (const btn of btns) {
+            const ariaLabel = btn.getAttribute('aria-label') || '';
+            const title = btn.getAttribute('title') || '';
+            if (ariaLabel.includes('发送') || ariaLabel.includes('Send') ||
+                title.includes('发送') || title.includes('Send') ||
+                btn.querySelector('svg') && btn.closest('[class*="input"]')) {
+              btn.click();
+              console.log(`${SCRIPT_PREFIX} ✅ Send button clicked`);
+              return;
+            }
+          }
+          // Fallback: simulate Enter key on textarea
+          textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+          console.log(`${SCRIPT_PREFIX} Enter key simulated`);
+        }, 300);
+      } else {
+        console.log(`${SCRIPT_PREFIX} ⚠️ Could not find chat textarea`);
+      }
+    }, 1500);
   }
 
   // ═══════════════════════════════════════════════════════════════
