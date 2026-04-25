@@ -154,6 +154,11 @@ ds-enhance/
 
 [GPL-3.0](./LICENSE)
 
+## 致谢
+
+- [MCP Bridge](https://github.com/WongJingGitt/mcp_bridge) — 本项目的 SSE 解析、请求拦截、工具注入等核心思路参考了 WongJingGitt 的 MCP Bridge 浏览器扩展，特此感谢
+- [吾爱破解 — DeepSeek 结合 MCP 让 AI 操控你的电脑](https://www.52pojie.cn/forum.php?mod=viewthread&tid=2087748&highlight=deepseek%2B%BD%C5%B1%BE) — 参考帖子，提供了宝贵的思路
+
 ## 友情链接
 
 [Linuxdo](https://linux.do)
