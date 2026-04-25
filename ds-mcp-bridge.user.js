@@ -209,82 +209,108 @@
   };
 
   // ═══════════════════════════════════════════════════════════════
-  //  DOM Observer — detect tool calls from rendered chat messages
-  //  DeepSeek streams via XHR SSE; responseText is inaccessible
-  //  during the stream. So we watch the DOM for rendered code blocks
-  //  containing mcp:tool_name patterns.
+  //  DOM Observer — detect tool calls from rendered chat
+  //
+  //  DeepSeek renders code blocks as <span class="hash"> text nodes,
+  //  NOT as <code> or <pre> elements. Tool names and JSON args may
+  //  also be split across sibling spans.
+  //
+  //  Strategy: use TreeWalker to find text nodes containing "mcp:xxx",
+  //  then collect adjacent text from the parent container to get
+  //  the full tool call (name + args JSON).
   // ═══════════════════════════════════════════════════════════════
-  const executedCalls = new Set(); // dedup: "toolName:argsHash"
+  const executedCalls = new Set();
 
   function callKey(name, args) {
     return name + ':' + JSON.stringify(args);
   }
 
-  let _scanCount = 0;
   function scanForToolCalls(root) {
     if (!root || !root.querySelectorAll) return;
-    _scanCount++;
-    const debug = (_scanCount % 5 === 1);
 
-    // Find all code blocks
-    const codeBlocks = root.querySelectorAll('code');
-    if (debug) console.log(`${SCRIPT_PREFIX} [scan] ${codeBlocks.length} <code> blocks found`);
+    // Walk all text nodes looking for "mcp:toolname" pattern
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    let node;
+    while ((node = walker.nextNode())) {
+      const text = node.textContent || '';
 
-    for (const block of codeBlocks) {
-      const text = block.textContent || '';
+      // Skip our own injected hint text
+      if (text.includes('[系统指令]') || text.includes('可用工具列表')) continue;
 
-      // Debug: show any code block that contains "mcp"
-      if (debug && text.includes('mcp')) {
-        console.log(`${SCRIPT_PREFIX} [scan] code contains "mcp":`, JSON.stringify(text.substring(0, 300)));
+      // Check if this text node contains a tool call: "mcp:some_tool_name"
+      const toolMatch = text.match(/\bmcp:(\w+)\b/);
+      if (!toolMatch) continue;
+
+      const toolName = toolMatch[1];
+
+      // Skip if this text node is part of a description line like
+      // "- execute_command: Execute a shell command"
+      // (descriptions have a colon-space after the tool name, not a newline or brace)
+      const afterTool = text.substring(text.indexOf('mcp:' + toolName));
+      if (afterTool.match(/^mcp:\w+:\s/)) continue; // "mcp:name: description" pattern
+
+      // Walk up the DOM to find a container that has both the tool name AND args.
+      // DeepSeek renders code blocks as nested <span> elements — the tool name
+      // and JSON args are in sibling spans under a common ancestor.
+      // IMPORTANT: in DOM, textContent concatenates without newlines, so
+      // "mcp:list_directory" + "{}" becomes "mcp:list_directory{}"
+      let container = node.parentElement;
+      let fullText = '';
+      for (let depth = 0; depth < 15 && container; depth++) {
+        fullText = container.textContent || '';
+        const hasTool = fullText.includes('mcp:' + toolName);
+        const hasArgs = fullText.includes('{') || fullText.includes('()');
+        if (hasTool && hasArgs) break;
+        // Also stop if we've reached a clearly distinct section (the hint text)
+        if (fullText.includes('[系统指令]') && fullText.includes('mcp:' + toolName)) {
+          // This container includes our hint — go back down
+          container = null;
+          break;
+        }
+        container = container.parentElement;
       }
 
-      const m = text.match(/^mcp:(\w+)\s*\n([\s\S]*)$/);
-      if (!m) continue;
+      if (!container) continue;
+      fullText = container.textContent || '';
 
-      const toolName = m[1];
-      const rawArgs = m[2].trim();
+      // Extract tool call from the concatenated text.
+      // After DOM concatenation: "mcp:tool_name{"arg":"val"}" or "mcp:tool_name{}"
+      // Also handle: "mcp:tool_name" (no args)
+      const callMatch = fullText.match(/mcp:(\w+)(\{[\s\S]*\})?/);
+      if (!callMatch) continue;
+
+      const detectedTool = callMatch[1];
+      const rawArgs = (callMatch[2] || '').trim();
+
       let args = {};
-      try { args = JSON.parse(rawArgs); }
-      catch { args = { input: rawArgs }; }
+      if (rawArgs) {
+        try { args = JSON.parse(rawArgs); }
+        catch { args = { input: rawArgs }; }
+      }
 
-      const key = callKey(toolName, args);
+      const key = callKey(detectedTool, args);
       if (executedCalls.has(key)) continue;
       executedCalls.add(key);
 
-      console.log(`${SCRIPT_PREFIX} 🔧 Tool call detected: ${toolName}`, args);
-      executeToolCall(toolName, args);
-    }
-
-    // Fallback: scan ALL elements for mcp: text
-    if (debug) {
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-      let node, found = 0;
-      while ((node = walker.nextNode())) {
-        if (node.textContent.includes('mcp:')) {
-          found++;
-          if (found <= 3) {
-            console.log(`${SCRIPT_PREFIX} [scan] text node has mcp:`, JSON.stringify(node.textContent.substring(0, 200)));
-            console.log(`${SCRIPT_PREFIX} [scan] parent element:`, node.parentElement?.tagName, node.parentElement?.className?.substring(0, 60));
-          }
-        }
-      }
-      if (found) console.log(`${SCRIPT_PREFIX} [scan] total text nodes with mcp: ${found}`);
+      console.log(`${SCRIPT_PREFIX} 🔧 Tool call detected: ${detectedTool}`, args);
+      executeToolCall(detectedTool, args);
     }
   }
 
   waitForDOM().then(() => {
-    // Debounced scan: collect mutations and scan once after a pause
     let scanTimer = null;
     function scheduleScan() {
       if (scanTimer) clearTimeout(scanTimer);
-      scanTimer = setTimeout(() => scanForToolCalls(document.body), 500);
+      scanTimer = setTimeout(() => scanForToolCalls(document.body), 800);
     }
 
     const observer = new MutationObserver(() => scheduleScan());
     observer.observe(document.body, { childList: true, subtree: true });
 
-    // Also scan periodically as safety net
+    // Periodic safety net
     setInterval(() => scanForToolCalls(document.body), 5000);
+
+    console.log(`${SCRIPT_PREFIX} DOM observer active`);
   });
 
   // ═══════════════════════════════════════════════════════════════
