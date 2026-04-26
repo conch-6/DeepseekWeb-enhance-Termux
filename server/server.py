@@ -13,6 +13,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import json
 import uuid
 import argparse
@@ -52,6 +53,7 @@ def setup_file_logging(log_file: str | None) -> None:
 
 # ─── Config ────────────────────────────────────────────────────
 CONFIG_PATH = Path(__file__).parent / "mcp.json"
+PRESETS_PATH = Path(__file__).parent / "presets.json"
 
 
 def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
@@ -258,6 +260,86 @@ async def stop_external_server(name: str):
     """Stop a running external MCP server without removing config."""
     result = await external_proxy.stop_server(name)
     status_code = 200 if result["ok"] else 404
+    return JSONResponse(result, status_code=status_code)
+
+
+# ─── Preset Marketplace API ────────────────────────────────────
+
+def load_presets() -> list[dict]:
+    try:
+        with open(PRESETS_PATH, encoding='utf-8') as f:
+            return json.load(f).get("presets", [])
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+@app.get("/api/presets")
+async def list_presets():
+    """Return available presets, marking which are already installed."""
+    presets = load_presets()
+    installed = set(external_proxy._configs.keys())
+    result = []
+    for p in presets:
+        entry = {**p, "installed": p["id"] in installed}
+        result.append(entry)
+    return {"presets": result}
+
+
+@app.post("/api/presets/{preset_id}/install")
+async def install_preset(preset_id: str, request: Request):
+    """Install a preset by ID, substituting user-provided params."""
+    presets = load_presets()
+    preset = next((p for p in presets if p["id"] == preset_id), None)
+    if not preset:
+        return JSONResponse({"ok": False, "error": f"Preset '{preset_id}' not found"}, status_code=404)
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    user_params = body.get("params", {})
+
+    # Validate required params
+    missing = []
+    for param in preset.get("params", []):
+        if param["required"] and not user_params.get(param["key"]):
+            missing.append(param["label"])
+    if missing:
+        return JSONResponse(
+            {"ok": False, "error": f"Missing required params: {', '.join(missing)}"},
+            status_code=400,
+        )
+
+    # Deep copy config and substitute {{KEY}} placeholders
+    cfg = copy.deepcopy(preset["config"])
+
+    def substitute(obj):
+        if isinstance(obj, str):
+            for key, val in user_params.items():
+                obj = obj.replace(f"{{{{{key}}}}}", val)
+            return obj
+        if isinstance(obj, list):
+            return [substitute(item) for item in obj]
+        if isinstance(obj, dict):
+            return {k: substitute(v) for k, v in obj.items()}
+        return obj
+
+    cfg = substitute(cfg)
+
+    # Remove env entries that have unresolved placeholders
+    if "env" in cfg:
+        cfg["env"] = {k: v for k, v in cfg["env"].items() if "{{" not in v}
+
+    # Use preset name as server name (sanitize for ID)
+    server_name = preset_id
+
+    try:
+        result = await external_proxy.add_server(server_name, cfg)
+    except Exception as e:
+        logger.error(f"install_preset error: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+    status_code = 200 if result["ok"] else 400
     return JSONResponse(result, status_code=status_code)
 
 

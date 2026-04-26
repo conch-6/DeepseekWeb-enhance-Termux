@@ -873,21 +873,94 @@
 
     let extFormOpen = false;
 
+    let presetParamForm = null; // {presetId, preset} when param form is open
+
     async function renderExtTab() {
       secExt.innerHTML = '<div style="color:#888;font-size:13px">加载中...</div>';
 
-      let data;
+      // Fetch presets and servers in parallel
+      let presets = [], servers = [];
       try {
-        data = await extApiCall('/api/external-servers');
+        const [presetData, serverData] = await Promise.all([
+          extApiCall('/api/presets'),
+          extApiCall('/api/external-servers'),
+        ]);
+        presets = presetData.presets || [];
+        servers = serverData.servers || [];
       } catch (e) {
         secExt.innerHTML = `<div style="color:#f87171;font-size:13px">连接失败: ${esc(e.message)}</div>`;
         return;
       }
 
-      const servers = data.servers || [];
+      const installedIds = new Set(servers.map(s => s.name));
       let html = '';
 
-      // Server list
+      // ═══ Preset Marketplace ═══
+      html += '<div style="font-size:13px;font-weight:600;color:#ccc;margin-bottom:10px">工具预设</div>';
+
+      // Group by category
+      const categories = {};
+      presets.forEach(p => {
+        const cat = p.category || '其他';
+        if (!categories[cat]) categories[cat] = [];
+        categories[cat].push(p);
+      });
+
+      for (const [cat, items] of Object.entries(categories)) {
+        html += `<div style="font-size:11px;color:#666;margin:8px 0 4px">${esc(cat)}</div>`;
+        html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">';
+        items.forEach(p => {
+          const installed = installedIds.has(p.id);
+          const hasParams = p.params?.length > 0;
+          const btnText = installed ? '已启用' : (hasParams ? '配置' : '启用');
+          const btnClass = installed ? 'ext-preset-installed' : 'ext-preset-install';
+          const btnStyle = installed
+            ? 'background:#1a3a2a;color:#4ade80;border-color:#4ade80;cursor:default'
+            : 'background:#222;color:#7aa2f7;border-color:#7aa2f7';
+          html += `
+            <div class="ext-preset-card" data-preset-id="${esc(p.id)}" style="flex:0 0 calc(50% - 3px);padding:8px 10px;border:1px solid #333;border-radius:8px;background:#1a1a28;cursor:${installed ? 'default' : 'pointer'}">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <span style="font-size:13px;font-weight:500;color:#ccc">${esc(p.name)}</span>
+                <button class="${btnClass} mcp-btn" data-preset-id="${esc(p.id)}" style="${btnStyle};font-size:10px;padding:2px 8px" ${installed ? 'disabled' : ''}>${btnText}</button>
+              </div>
+              <div style="font-size:11px;color:#888;margin-top:3px">${esc(p.description)}</div>
+            </div>
+          `;
+        });
+        html += '</div>';
+      }
+
+      // ═══ Param form (shown when configuring a preset) ═══
+      if (presetParamForm) {
+        const p = presetParamForm;
+        html += `
+          <div class="ext-section" id="ext-param-form">
+            <div style="font-size:13px;font-weight:600;color:#ccc;margin-bottom:8px">配置: ${esc(p.name)}</div>
+        `;
+        p.params.forEach(param => {
+          const req = param.required ? ' *' : '';
+          const inputType = param.secret ? 'password' : 'text';
+          html += `
+            <div style="margin-bottom:6px">
+              <label style="font-size:11px;color:#888;display:block;margin-bottom:2px">${esc(param.label)}${req}</label>
+              <input class="mcp-input ext-param-input" data-key="${esc(param.key)}" type="${inputType}"
+                     placeholder="${esc(param.placeholder || '')}" style="font-size:12px" />
+            </div>
+          `;
+        });
+        html += `
+            <div style="margin-top:8px;display:flex;gap:6px">
+              <button class="mcp-btn pri" id="ext-param-submit">安装</button>
+              <button class="mcp-btn" id="ext-param-cancel">取消</button>
+            </div>
+          </div>
+        `;
+      }
+
+      // ═══ Installed Servers ═══
+      html += '<div class="ext-section">';
+      html += '<div style="font-size:13px;font-weight:600;color:#ccc;margin-bottom:10px">已安装的服务器</div>';
+
       if (servers.length === 0) {
         html += '<div style="color:#666;font-size:13px;margin-bottom:10px">暂无外部 MCP 服务器</div>';
       } else {
@@ -924,14 +997,8 @@
       // Add form — JSON import
       const defaultJson = JSON.stringify({
         "mcpServers": {
-          "context7": {
-            "command": "npx",
-            "args": ["-y", "@upstash/context7-mcp"]
-          },
-          "fetch": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-fetch"]
-          }
+          "context7": { "command": "npx", "args": ["-y", "@upstash/context7-mcp"] },
+          "fetch": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-fetch"] }
         }
       }, null, 2);
 
@@ -939,7 +1006,7 @@
       html += `<div id="ext-add-form" style="display:${extFormOpen ? 'block' : 'none'};margin-top:8px">`;
       html += `
         <div style="font-size:11px;color:#888;margin-bottom:6px">
-          支持粘贴任意格式的 MCP 配置 JSON，可同时导入多个（如 Claude Desktop、MCP Inspector 配置）
+          支持粘贴任意格式的 MCP 配置 JSON，可同时导入多个
         </div>
         <textarea id="ext-f-json" style="width:100%;height:180px;padding:8px;border-radius:8px;border:1px solid #444;background:#0d0d18;color:#a0a0c0;font-size:11px;font-family:monospace;resize:vertical;box-sizing:border-box;outline:none;line-height:1.4" spellcheck="false">${esc(defaultJson)}</textarea>
         <div style="margin-top:8px;display:flex;gap:6px">
@@ -948,65 +1015,102 @@
         </div>
       </div>`;
 
-      html += `
-        <div style="margin-top:12px">
-          <button class="mcp-btn" id="ext-refresh">刷新</button>
-        </div>
-      `;
+      html += `<div style="margin-top:12px"><button class="mcp-btn" id="ext-refresh">刷新</button></div>`;
+      html += '</div>'; // close installed section
 
       secExt.innerHTML = html;
 
-      // ── Event bindings ──
+      // ── Preset install buttons ──
+      secExt.querySelectorAll('.ext-preset-install').forEach(btn => {
+        btn.onclick = async (e) => {
+          e.stopPropagation();
+          const presetId = btn.dataset.presetId;
+          const preset = presets.find(p => p.id === presetId);
+          if (!preset) return;
+
+          if (preset.params?.length > 0) {
+            // Show param form
+            presetParamForm = preset;
+            renderExtTab();
+          } else {
+            // One-click install
+            try {
+              const result = await extApiCall(`/api/presets/${presetId}/install`, 'POST', {});
+              if (result.ok) {
+                toast(`${preset.name} 已安装，${result.tools?.length || 0} 个工具`, 'success');
+                renderExtTab();
+                refreshStatus();
+              } else {
+                toast(result.error || '安装失败', 'error');
+              }
+            } catch (e) { toast(e.message, 'error'); }
+          }
+        };
+      });
+
+      // ── Param form submit ──
+      const paramSubmit = secExt.querySelector('#ext-param-submit');
+      if (paramSubmit) {
+        paramSubmit.onclick = async () => {
+          const params = {};
+          secExt.querySelectorAll('.ext-param-input').forEach(inp => {
+            params[inp.dataset.key] = inp.value.trim();
+          });
+          try {
+            const result = await extApiCall(`/api/presets/${presetParamForm.id}/install`, 'POST', { params });
+            if (result.ok) {
+              toast(`${presetParamForm.name} 已安装，${result.tools?.length || 0} 个工具`, 'success');
+              presetParamForm = null;
+              renderExtTab();
+              refreshStatus();
+            } else {
+              toast(result.error || '安装失败', 'error');
+            }
+          } catch (e) { toast(e.message, 'error'); }
+        };
+      }
+      const paramCancel = secExt.querySelector('#ext-param-cancel');
+      if (paramCancel) {
+        paramCancel.onclick = () => { presetParamForm = null; renderExtTab(); };
+      }
+
+      // ── Existing server management bindings ──
 
       // Add form toggle
-      secExt.querySelector('#ext-add-btn').onclick = () => {
+      secExt.querySelector('#ext-add-btn')?.addEventListener('click', () => {
         extFormOpen = !extFormOpen;
         secExt.querySelector('#ext-add-form').style.display = extFormOpen ? 'block' : 'none';
-      };
+      });
 
       // Cancel
-      secExt.querySelector('#ext-add-cancel').onclick = () => {
+      secExt.querySelector('#ext-add-cancel')?.addEventListener('click', () => {
         extFormOpen = false;
         secExt.querySelector('#ext-add-form').style.display = 'none';
-      };
+      });
 
       // Submit JSON import
-      secExt.querySelector('#ext-add-submit').onclick = async () => {
+      secExt.querySelector('#ext-add-submit')?.addEventListener('click', async () => {
         const raw = secExt.querySelector('#ext-f-json').value.trim();
         if (!raw) { toast('请粘贴 JSON 配置', 'error'); return; }
 
         let parsed;
-        try {
-          parsed = JSON.parse(raw);
-        } catch (e) {
-          toast(`JSON 解析失败: ${e.message}`, 'error');
-          return;
-        }
+        try { parsed = JSON.parse(raw); }
+        catch (e) { toast(`JSON 解析失败: ${e.message}`, 'error'); return; }
 
-        // Normalize into {name: config} map — auto-unwrap common wrappers
+        // Auto-unwrap common wrappers
+        if (parsed.mcpServers && typeof parsed.mcpServers === 'object') parsed = parsed.mcpServers;
+        else if (parsed.servers && typeof parsed.servers === 'object') parsed = parsed.servers;
+
         let entries;
-
-        // Unwrap mcpServers / servers wrapper (Claude Desktop / common formats)
-        if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
-          parsed = parsed.mcpServers;
-        } else if (parsed.servers && typeof parsed.servers === 'object') {
-          parsed = parsed.servers;
-        }
-
         if (parsed.name && typeof parsed.name === 'string') {
-          // Single server object with name field: {name, command, ...}
           const { name, ...cfg } = parsed;
           entries = { [name]: cfg };
         } else if (parsed.command || parsed.url) {
-          // Single server without name — ask for it
-          toast('缺少 name 字段，请用 {"name": "xxx", ...} 格式', 'error');
-          return;
+          toast('缺少 name 字段', 'error'); return;
         } else {
-          // Assume {serverName: config, ...}
           entries = parsed;
         }
 
-        // Send as single batch request
         try {
           const result = await extApiCall('/api/external-servers', 'POST', { mcpServers: entries });
           let added = 0, errors = [];
@@ -1021,10 +1125,46 @@
             refreshStatus();
           }
           errors.forEach(e => toast(e, 'error'));
-        } catch (e) {
-          toast(`请求失败: ${e.message || '网络错误'}`, 'error');
-        }
-      };
+        } catch (e) { toast(`请求失败: ${e.message || '网络错误'}`, 'error'); }
+      });
+
+      // Start/Stop/Remove
+      secExt.querySelectorAll('.ext-start').forEach(btn => {
+        btn.onclick = async () => {
+          const name = btn.dataset.name;
+          try {
+            const result = await extApiCall(`/api/external-servers/${name}/start`, 'POST');
+            toast(result.ok ? `${name} 已启动` : result.error, result.ok ? 'success' : 'error');
+            renderExtTab(); refreshStatus();
+          } catch (e) { toast(e.message, 'error'); }
+        };
+      });
+
+      secExt.querySelectorAll('.ext-stop').forEach(btn => {
+        btn.onclick = async () => {
+          const name = btn.dataset.name;
+          try {
+            const result = await extApiCall(`/api/external-servers/${name}/stop`, 'POST');
+            toast(result.ok ? `${name} 已停止` : result.error, result.ok ? 'success' : 'error');
+            renderExtTab(); refreshStatus();
+          } catch (e) { toast(e.message, 'error'); }
+        };
+      });
+
+      secExt.querySelectorAll('.ext-remove').forEach(btn => {
+        btn.onclick = async () => {
+          const name = btn.dataset.name;
+          if (!confirm(`确定删除 ${name}？`)) return;
+          try {
+            const result = await extApiCall(`/api/external-servers/${name}`, 'DELETE');
+            toast(result.ok ? `${name} 已删除` : result.error, result.ok ? 'success' : 'error');
+            renderExtTab(); refreshStatus();
+          } catch (e) { toast(e.message, 'error'); }
+        };
+      });
+
+      // Refresh
+      secExt.querySelector('#ext-refresh')?.addEventListener('click', renderExtTab);
 
       // Start/Stop/Remove
       secExt.querySelectorAll('.ext-start').forEach(btn => {

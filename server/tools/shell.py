@@ -12,6 +12,7 @@ WORKSPACE_ROOT: pathlib.Path = pathlib.Path(os.environ.get("DS_WORKSPACE", os.ge
 DANGEROUS_PATTERNS: list[str] = [
     "rm -rf /", "rm -rf /*", ":(){ :|:& };:", "mkfs", "dd if=",
     "> /dev/sd", "chmod 777 /", "chown root",
+    "taskkill", "taskkill.exe", "kill", "pkill", "killall",
 ]
 
 

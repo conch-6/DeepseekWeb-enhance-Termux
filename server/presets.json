@@ -1,0 +1,102 @@
+{
+  "presets": [
+    {
+      "id": "context7",
+      "name": "Context7 文档",
+      "description": "查询编程库和框架的最新文档",
+      "category": "开发",
+      "config": {
+        "command": "npx",
+        "args": ["-y", "@upstash/context7-mcp"]
+      },
+      "params": []
+    },
+    {
+      "id": "fetch",
+      "name": "网页抓取",
+      "description": "获取网页内容（支持 HTML → Markdown 转换）",
+      "category": "网络",
+      "config": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-fetch"]
+      },
+      "params": []
+    },
+    {
+      "id": "memory",
+      "name": "持久化记忆",
+      "description": "基于知识图谱的持久化记忆，跨会话保留上下文",
+      "category": "AI",
+      "config": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-memory"]
+      },
+      "params": []
+    },
+    {
+      "id": "sequential-thinking",
+      "name": "思维链推理",
+      "description": "结构化逐步推理，提升复杂问题解决能力",
+      "category": "AI",
+      "config": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+      },
+      "params": []
+    },
+    {
+      "id": "filesystem",
+      "name": "文件系统",
+      "description": "读写本地文件和目录",
+      "category": "文件",
+      "config": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "{{PATH}}"]
+      },
+      "params": [
+        {"key": "PATH", "label": "目录路径", "placeholder": "/home/user/docs", "required": true}
+      ]
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "description": "操作 GitHub 仓库、Issue、PR",
+      "category": "开发",
+      "config": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "{{GITHUB_TOKEN}}"}
+      },
+      "params": [
+        {"key": "GITHUB_TOKEN", "label": "GitHub Token", "placeholder": "ghp_xxx", "required": true, "secret": true}
+      ]
+    },
+    {
+      "id": "brave-search",
+      "name": "Brave 搜索",
+      "description": "使用 Brave Search API 进行网页搜索",
+      "category": "网络",
+      "config": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+        "env": {"BRAVE_API_KEY": "{{BRAVE_API_KEY}}"}
+      },
+      "params": [
+        {"key": "BRAVE_API_KEY", "label": "Brave API Key", "placeholder": "BSAxxx", "required": true, "secret": true}
+      ]
+    },
+    {
+      "id": "sqlite",
+      "name": "SQLite 数据库",
+      "description": "查询和管理 SQLite 数据库",
+      "category": "数据",
+      "config": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-sqlite", "{{DB_PATH}}"]
+      },
+      "params": [
+        {"key": "DB_PATH", "label": "数据库文件路径", "placeholder": "/home/user/data.db", "required": true}
+      ]
+    }
+  ]
+}
