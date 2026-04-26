@@ -1,6 +1,34 @@
 # Changelog
 
-## [Unreleased] - 2026-04-26
+## [4.0.0] - 2026-04-26
+
+### Added
+- **TTS 语音朗读**：AI 回复旁显示 🔊 按钮，支持手动朗读
+  - Edge TTS（免费，内置 21 个常用语音）
+  - OpenAI 兼容 TTS（支持任意 OpenAI-compatible API，可配置 API Key / Base URL / 模型）
+  - 自定义 HTTP TTS（接入任意 TTS API，支持请求模板）
+  - 语音筛选：按语言（中文/英语/日语/韩语）和性别过滤，连通 server 后加载完整 322 个语音
+- **自动朗读**：AI 回复完成后自动播放 TTS，等待文本稳定（连续 1.5 秒无变化）后触发
+- **多站点适配器架构**：自动检测当前站点并加载对应适配器
+  - DeepSeek Chat — 完整支持
+  - ChatGPT — 基础适配样板（开发中）
+- **模块开关**：MCP / TTS / 自动朗读 可独立开启/关闭（设置页）
+- **工具结果文件化**：`read_file` / `list_directory` 结果不再填满聊天窗口，而是作为文件上下文自动注入下次对话
+- **文件处理器** (`server/tools/file_processor.py`)：支持 TXT/MD/JSON/CSV/PDF/图片
+- **TTS API 端点**：`POST /api/tts`（合成语音）+ `GET /api/tts/voices`（语音列表）
+- **文件上传 API**：`POST /api/upload` + `GET /api/upload/status`（并发队列管理）
+
+### Changed
+- `ds-mcp-bridge.user.js` 版本升级至 4.0.0，行数从 ~1251 增至 ~1680
+- XHR/fetch hook 现在受模块开关控制（MCP 关闭时不拦截请求）
+- `@match` 新增 `chat.openai.com` 和 `chatgpt.com`
+
+### Dependencies
+- 新增 `edge-tts>=6.0`（TTS 引擎）
+- 新增 `pymupdf>=1.23`（PDF 文本提取）
+- 新增 `python-multipart>=0.0.6`（文件上传支持）
+
+## [3.2.0] - 2026-04-26
 
 ### Added
 - 外部 MCP 服务器支持：在 `mcp.json` 的 `mcpServers` 中配置第三方 MCP 服务器
