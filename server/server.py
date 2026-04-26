@@ -22,16 +22,19 @@ import sys
 from pathlib import Path
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
+import asyncio
 from typing import Any
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request, UploadFile, File
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 # Import tool modules
 from tools.shell import TOOL_DEFINITIONS as SHELL_TOOLS, HANDLERS as SHELL_HANDLERS
 from tools.search import TOOL_DEFINITIONS as SEARCH_TOOLS, ASYNC_HANDLERS as SEARCH_HANDLERS
 from tools.mcp_external import ExternalMCPProxy
+from tools.tts import TOOL_DEFINITIONS as TTS_TOOLS, tts_synthesize, list_edge_voices
+from tools.file_processor import process_file
 
 logging.basicConfig(
     level=logging.INFO,
@@ -87,6 +90,10 @@ for tool_def in SEARCH_TOOLS:
     ALL_TOOLS[tool_def["name"]] = tool_def
 for name, handler in SEARCH_HANDLERS.items():
     ASYNC_HANDLERS_MAP[name] = handler
+
+# TTS tools (async)
+for tool_def in TTS_TOOLS:
+    ALL_TOOLS[tool_def["name"]] = tool_def
 
 # Filter tools based on config
 enabled_tools = set()
@@ -463,6 +470,119 @@ async def handle_jsonrpc(msg: dict):
         "id": msg_id,
         "error": {"code": -32601, "message": f"Method not found: {method}"},
     }
+
+
+
+# ─── TTS Upload Queue ──────────────────────────────────────────
+# Upload queue uses asyncio.Semaphore (see below)
+
+_upload_semaphore = asyncio.Semaphore(3)
+
+
+# ─── API: TTS ──────────────────────────────────────────────────
+@app.post("/api/tts")
+async def api_tts(request: Request):
+    """Synthesize text to speech, return MP3 audio bytes."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    text = body.get("text", "").strip()
+    if not text:
+        return JSONResponse({"error": "Missing 'text' field"}, status_code=400)
+
+    voice = body.get("voice", "xiaoxiao")
+    provider = body.get("provider", "edge")
+
+    # Build provider config: request body > mcp.json > defaults
+    tts_cfg = config.get("services", {}).get("tts", {}).get("config", {})
+    provider_config = {}
+    if provider == "openai":
+        provider_config["api_key"] = body.get("api_key", "") or tts_cfg.get("api_key", "")
+        provider_config["base_url"] = body.get("base_url", "") or tts_cfg.get("base_url", "https://api.openai.com/v1")
+        provider_config["model"] = body.get("model", "") or tts_cfg.get("model", "tts-1")
+    elif provider == "http":
+        provider_config["url"] = body.get("url", "") or tts_cfg.get("url", "")
+        provider_config["api_key"] = body.get("api_key", "") or tts_cfg.get("api_key", "")
+        provider_config["headers"] = tts_cfg.get("headers")
+        provider_config["body_template"] = tts_cfg.get("body_template")
+
+    try:
+        audio = await tts_synthesize(
+            text=text,
+            voice=voice,
+            provider=provider,
+            config=provider_config,
+        )
+        return Response(
+            content=audio,
+            media_type="audio/mpeg",
+            headers={"Content-Disposition": "inline; filename=tts.mp3"},
+        )
+    except Exception as e:
+        logger.error(f"TTS error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+
+
+# ─── API: TTS Voices ──────────────────────────────────────────
+@app.get("/api/tts/voices")
+async def api_tts_voices():
+    """List available Edge TTS voices."""
+    voices = await list_edge_voices()
+    return JSONResponse({"voices": voices})
+
+# ─── API: File Upload ──────────────────────────────────────────
+@app.post("/api/upload")
+async def api_upload(file: UploadFile = File(...)):
+    """Process an uploaded file, return extracted text and metadata."""
+    if not file.filename:
+        return JSONResponse({"error": "No filename provided"}, status_code=400)
+
+    try:
+        file_bytes = await file.read()
+    except Exception as e:
+        return JSONResponse({"error": f"Failed to read file: {e}"}, status_code=400)
+
+    if not file_bytes:
+        return JSONResponse({"error": "File is empty"}, status_code=400)
+
+    # Enforce concurrency limit
+    acquired = await asyncio.wait_for(
+        _upload_semaphore.acquire(), timeout=0.1
+    ) if _upload_semaphore._value > 0 else False
+    if not acquired:
+        return JSONResponse(
+            {"error": "上传队列已满（最多 3 个并发），请稍后重试", "queue_full": True},
+            status_code=429,
+        )
+
+    try:
+        result = process_file(
+            file_bytes=file_bytes,
+            filename=file.filename,
+            mime_type=file.content_type or "",
+        )
+        return JSONResponse(result.to_dict())
+    except Exception as e:
+        logger.error(f"File processing error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        _upload_semaphore.release()
+
+
+# ─── API: Upload Queue Status ──────────────────────────────────
+@app.get("/api/upload/status")
+async def api_upload_status():
+    """Return upload queue status."""
+    available = _upload_semaphore._value if hasattr(_upload_semaphore, "_value") else -1
+    return JSONResponse({
+        "max_concurrent": 3,
+        "available_slots": available,
+    })
+
 
 
 # ─── Main ──────────────────────────────────────────────────────

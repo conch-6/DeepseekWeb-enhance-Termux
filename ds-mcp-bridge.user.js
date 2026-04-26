@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         DS MCP Bridge
 // @namespace    https://github.com/calendar0917/ds-enhance
-// @version      3.0.0
-// @description  让 DeepSeek Chat 调用本地 MCP 工具（Shell、搜索等）
+// @version      4.0.0
+// @description  AI Chat 增强 — MCP 工具调用 + TTS 朗读 + 多站点适配
 // @author       ds-enhance
 // @match        https://chat.deepseek.com/*
+// @match        https://chat.openai.com/*
+// @match        https://chatgpt.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -18,6 +20,86 @@
   const SCRIPT_PREFIX = '[Bridge]';
   const DEFAULT_MCP_URL = 'http://localhost:8024/mcp';
   const TOOL_CALL_RE = /```mcp:(\w+)\n([\s\S]*?)```/g;
+
+  // ═══════════════════════════════════════════════════════════════
+  //  Module Toggles (top-level so XHR/fetch hooks can access)
+  // ═══════════════════════════════════════════════════════════════
+  const MODULE_DEFAULTS = { mcp: true, tts: true, ttsAutoPlay: false };
+  function getModuleEnabled(mod) { return GM_getValue('mod_' + mod, MODULE_DEFAULTS[mod]); }
+  function setModuleEnabled(mod, val) { GM_setValue('mod_' + mod, val); }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  Adapter Registry — Multi-site support
+  // ═══════════════════════════════════════════════════════════════
+  const ADAPTERS = {
+    deepseek: {
+      id: 'deepseek',
+      name: 'DeepSeek Chat',
+      match: (url) => /chat\.deepseek\.com/.test(url),
+      selectors: {
+        assistantMessages: '.ds-markdown--block, [class*="markdown"]',
+        inputBox: 'textarea, [contenteditable="true"][placeholder]',
+      },
+      getRequestPattern: () => /completion/,
+    },
+    chatgpt: {
+      id: 'chatgpt',
+      name: 'ChatGPT',
+      match: (url) => /chat\.openai\.com|chatgpt\.com/.test(url),
+      selectors: {
+        assistantMessages: '[data-message-author-role="assistant"]',
+        inputBox: 'textarea[id="prompt-textarea"], #prompt-textarea',
+      },
+      getRequestPattern: () => /backend-api\/conversation/,
+    },
+  };
+
+  function detectAdapter() {
+    const url = location.href;
+    for (const [id, adapter] of Object.entries(ADAPTERS)) {
+      if (adapter.match(url)) {
+        console.log(`${SCRIPT_PREFIX} Detected adapter: ${adapter.name}`);
+        return adapter;
+      }
+    }
+    console.log(`${SCRIPT_PREFIX} No adapter matched for: ${url}`);
+    return null;
+  }
+
+  const currentAdapter = detectAdapter();
+
+  // ═══════════════════════════════════════════════════════════════
+  //  File Context (tool results only — native upload handled by DS)
+  // ═══════════════════════════════════════════════════════════════
+  const _toolFiles = [];
+
+  function addToolFileResult(filename, text, mimeType) {
+    _toolFiles.push({ filename, _textContent: text, mime_type: mimeType || 'text/plain' });
+  }
+
+  function injectToolFileContext(bodyStr) {
+    if (!_toolFiles.length || !bodyStr) return bodyStr;
+    try {
+      const parsed = JSON.parse(bodyStr);
+      let ctx = '\n\n[上传文件内容]\n';
+      for (const f of _toolFiles) {
+        ctx += `\n--- ${f.filename} ---\n${f._textContent}\n`;
+      }
+      if (parsed.prompt && typeof parsed.prompt === 'string') {
+        parsed.prompt += ctx;
+      } else if (parsed.messages?.length) {
+        const lastMsg = parsed.messages[parsed.messages.length - 1];
+        if (typeof lastMsg.content === 'string') lastMsg.content += ctx;
+        else if (Array.isArray(lastMsg.content)) {
+          const tp = lastMsg.content.find(p => p.type === 'text');
+          if (tp) tp.text += ctx;
+        }
+      }
+      console.log(`${SCRIPT_PREFIX} Injected ${_toolFiles.length} tool file context(s)`);
+      _toolFiles.length = 0;
+      return JSON.stringify(parsed);
+    } catch { return bodyStr; }
+  }
 
   // ═══════════════════════════════════════════════════════════════
   //  MCP Client (GM_xmlhttpRequest to bypass CORS)
@@ -107,6 +189,87 @@
   }
 
   // ═══════════════════════════════════════════════════════════════
+  //  TTS Client — Text-to-Speech via server API
+  // ═══════════════════════════════════════════════════════════════
+  class TTSClient {
+    constructor() {
+      this.audio = null;
+      this.playing = false;
+      this.currentText = '';
+    }
+
+    getBaseUrl() {
+      const mcpUrl = GM_getValue('mcp_url', DEFAULT_MCP_URL);
+      try { return new URL(mcpUrl).origin; }
+      catch { return mcpUrl.replace(/\/[^/]*$/, ''); }
+    }
+
+    async synthesize(text) {
+      const voice = GM_getValue('tts_voice', 'zh-CN-XiaoxiaoNeural');
+      const provider = GM_getValue('tts_provider', 'edge');
+      const body = { text, voice, provider };
+      if (provider === 'openai') {
+        body.api_key = GM_getValue('tts_api_key', '');
+        body.base_url = GM_getValue('tts_base_url', 'https://api.openai.com/v1');
+        body.model = GM_getValue('tts_model', 'tts-1');
+      }
+      const url = this.getBaseUrl() + '/api/tts';
+      return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: 'POST', url,
+          headers: { 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' },
+          data: JSON.stringify(body),
+          responseType: 'blob',
+          onload: (resp) => {
+            if (resp.status !== 200) {
+              try { const err = JSON.parse(resp.responseText); reject(new Error(err.error || 'TTS failed')); }
+              catch { reject(new Error('TTS HTTP ' + resp.status)); }
+              return;
+            }
+            resolve(URL.createObjectURL(resp.response));
+          },
+          onerror: () => reject(new Error('TTS 网络错误')),
+          ontimeout: () => reject(new Error('TTS 超时')),
+          timeout: 60000,
+        });
+      });
+    }
+
+    async play(text) {
+      this.stop();
+      this.currentText = text;
+      try {
+        const audioUrl = await this.synthesize(text);
+        this.audio = new Audio(audioUrl);
+        this.playing = true;
+        this.audio.onended = () => { this.playing = false; };
+        await this.audio.play();
+      } catch (e) {
+        console.warn(`${SCRIPT_PREFIX} TTS server failed, falling back to Web Speech:`, e.message);
+        this._fallbackPlay(text);
+      }
+    }
+
+    _fallbackPlay(text) {
+      if (!('speechSynthesis' in window)) { toast('TTS 不可用', 'error'); return; }
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'zh-CN';
+      u.rate = 1.0;
+      this.playing = true;
+      u.onend = () => { this.playing = false; };
+      window.speechSynthesis.speak(u);
+    }
+
+    stop() {
+      if (this.audio) { this.audio.pause(); this.audio.currentTime = 0; this.audio = null; this.playing = false; }
+      if (window.speechSynthesis) { window.speechSynthesis.cancel(); this.playing = false; }
+    }
+  }
+
+  const ttsClient = new TTSClient();
+
+  // ═══════════════════════════════════════════════════════════════
   //  Tool Registry & Hint Builder
   // ═══════════════════════════════════════════════════════════════
   let toolRegistry = [];
@@ -138,23 +301,20 @@
 
       if (parsed.prompt && typeof parsed.prompt === 'string') {
         parsed.prompt = hint + '\n\n' + parsed.prompt;
-        console.log(`${SCRIPT_PREFIX} Tool hint injected`);
-        return JSON.stringify(parsed);
+        return injectToolFileContext(JSON.stringify(parsed));
       }
       if (parsed.messages?.length) {
         const lastMsg = parsed.messages[parsed.messages.length - 1];
         const content = lastMsg?.content;
         if (typeof content === 'string') {
           lastMsg.content = hint + '\n\n' + content;
-          console.log(`${SCRIPT_PREFIX} Tool hint injected`);
-          return JSON.stringify(parsed);
+          return injectToolFileContext(JSON.stringify(parsed));
         }
         if (Array.isArray(content)) {
           const textPart = content.find(p => p.type === 'text');
           if (textPart && !textPart.text.includes('[系统指令]')) {
             textPart.text = hint + '\n\n' + textPart.text;
-            console.log(`${SCRIPT_PREFIX} Tool hint injected`);
-            return JSON.stringify(parsed);
+            return injectToolFileContext(JSON.stringify(parsed));
           }
         }
       }
@@ -273,7 +433,7 @@
     if (!meta) return origSend.apply(this, [body]);
 
     const isCompletion = meta.url.includes('completion');
-    if (isCompletion) {
+    if (isCompletion && getModuleEnabled('mcp')) {
       if (body) body = modifyRequest(body);
 
       let requestContent = '';
@@ -312,7 +472,7 @@
   unsafeWindow.fetch = async function (...args) {
     const url = (typeof args[0] === 'string') ? args[0] : args[0]?.url;
 
-    if (url && url.includes('completion')) {
+    if (url && url.includes('completion') && getModuleEnabled('mcp')) {
       if (args[1]?.body) {
         args[1].body = modifyRequest(args[1].body);
       }
@@ -346,7 +506,15 @@
       const isError = result?.isError;
 
       toast(isError ? `${toolName} 失败` : `${toolName} 完成`, isError ? 'error' : 'success');
-      injectResultToChat(isError ? `Error: ${resultText}` : resultText);
+
+      if (!isError && (toolName === 'read_file' || toolName === 'list_directory')) {
+        const filename = (args.path || args.filename || 'tool_result.txt').split('/').pop().split('\\').pop();
+        addToolFileResult(filename, resultText, 'text/plain');
+        toast(`📁 ${filename} 已添加到文件列表`, 'success');
+        injectResultToChat(`[工具 ${toolName} 的结果已作为文件添加，共 ${resultText.length} 字符。发送下条消息时会自动附带文件内容。]`);
+      } else {
+        injectResultToChat(isError ? `Error: ${resultText}` : resultText);
+      }
     } catch (e) {
       toast(`工具调用失败: ${e.message}`, 'error');
       console.error(`${SCRIPT_PREFIX} Tool error:`, e);
@@ -543,6 +711,30 @@
     .ext-add-toggle{font-size:12px;color:#7aa2f7;cursor:pointer;border:none;background:none;padding:0;margin-top:6px}
     .ext-add-toggle:hover{text-decoration:underline}
     .ext-section{margin-top:10px;padding-top:10px;border-top:1px solid #2a2a3a}
+
+    /* TTS Button */
+    .mcp-tts-btn {
+      display:inline-flex;align-items:center;gap:4px;
+      padding:3px 8px;border-radius:6px;border:1px solid #444;
+      background:#1a1a28;color:#ccc;font-size:11px;cursor:pointer;
+      transition:background .15s,border-color .15s;user-select:none;
+      margin-left:8px;vertical-align:middle;
+    }
+    .mcp-tts-btn:hover { background:#2a2a3e;border-color:#7aa2f7;color:#7aa2f7; }
+    .mcp-tts-btn.playing { background:#1a3a28;border-color:#16a34a;color:#4ade80; }
+    .mcp-tts-btn.paused { background:#3a2a18;border-color:#d97706;color:#fbbf24; }
+
+    /* Module toggles */
+    .mcp-toggle-row { display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #2a2a3a; }
+    .mcp-toggle-label { font-size:13px;color:#ccc; }
+    .mcp-toggle-desc { font-size:11px;color:#666;margin-top:2px; }
+    .mcp-switch { position:relative;width:36px;height:20px;flex-shrink:0; }
+    .mcp-switch input { opacity:0;width:0;height:0; }
+    .mcp-switch .slider { position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#333;border-radius:10px;transition:.2s; }
+    .mcp-switch .slider:before { position:absolute;content:"";height:16px;width:16px;left:2px;bottom:2px;background:#888;border-radius:50%;transition:.2s; }
+    .mcp-switch input:checked + .slider { background:#16a34a; }
+    .mcp-switch input:checked + .slider:before { transform:translateX(16px);background:#fff; }
+
   `;
 
   // ═══════════════════════════════════════════════════════════════
@@ -573,7 +765,7 @@
     panel.id = 'mcp-panel';
     panel.innerHTML = `
       <div class="hd">
-        <h3>DS MCP Bridge <span class="ver">v2.0.0</span></h3>
+        <h3>DS MCP Bridge <span class="ver">v4.0.0</span></h3>
         <button class="cls">&times;</button>
       </div>
       <div id="mcp-tabs">
@@ -853,6 +1045,12 @@
     //  Tab: External MCP Servers
     // ═══════════════════════════════════════════════════════════════
     const secExt = panel.querySelector('#mcp-sec-ext');
+
+    function getExtBaseUrl() {
+      const mcpUrl = GM_getValue('mcp_url', DEFAULT_MCP_URL);
+      try { return new URL(mcpUrl).origin; }
+      catch { return mcpUrl.replace(/\/[^/]*$/, ''); }
+    }
 
     function getBaseUrl() {
       const mcpUrl = GM_getValue('mcp_url', DEFAULT_MCP_URL);
@@ -1230,18 +1428,272 @@
         <label class="mcp-label">MCP 服务器地址</label>
         <input class="mcp-input" id="mcp-cfg-url" value="${GM_getValue('mcp_url', DEFAULT_MCP_URL)}" />
       </div>
-      <div style="margin-top:12px">
-        <button class="mcp-btn pri" id="mcp-cfg-save">保存</button>
+      <div style="margin-top:16px">
+        <label class="mcp-label">模块开关</label>
+        <div class="mcp-toggle-row">
+          <div><div class="mcp-toggle-label">🔧 MCP 工具调用</div><div class="mcp-toggle-desc">拦截 AI 回复并执行本地工具</div></div>
+          <label class="mcp-switch"><input type="checkbox" id="mod-toggle-mcp" ${getModuleEnabled('mcp') ? 'checked' : ''} /><span class="slider"></span></label>
+        </div>
+        <div class="mcp-toggle-row">
+          <div><div class="mcp-toggle-label">🔊 TTS 朗读</div><div class="mcp-toggle-desc">AI 回复旁显示朗读按钮</div></div>
+          <label class="mcp-switch"><input type="checkbox" id="mod-toggle-tts" ${getModuleEnabled('tts') ? 'checked' : ''} /><span class="slider"></span></label>
+        </div>
+        <div class="mcp-toggle-row">
+          <div><div class="mcp-toggle-label">🔊 自动朗读</div><div class="mcp-toggle-desc">AI 回复完成后自动 TTS 播放</div></div>
+          <label class="mcp-switch"><input type="checkbox" id="mod-toggle-ttsAutoPlay" ${getModuleEnabled('ttsAutoPlay') ? 'checked' : ''} /><span class="slider"></span></label>
+        </div>
       </div>
+      <div style="margin-top:16px">
+        <label class="mcp-label">TTS 设置</label>
+        <div class="mcp-toggle-row">
+          <div><div class="mcp-toggle-label">引擎</div><div class="mcp-toggle-desc">TTS 提供者</div></div>
+          <select class="mcp-sel" id="mcp-tts-provider" style="width:auto">
+            <option value="edge" ${GM_getValue('tts_provider', 'edge') === 'edge' ? 'selected' : ''}>Edge TTS (免费)</option>
+            <option value="openai" ${GM_getValue('tts_provider', 'edge') === 'openai' ? 'selected' : ''}>OpenAI 兼容</option>
+          </select>
+        </div>
+        <div style="margin-top:8px">
+          <label class="mcp-label">语音</label>
+          <div style="display:flex;gap:6px;margin-bottom:6px">
+            <select class="mcp-sel" id="mcp-tts-voice-filter-locale" style="width:auto;font-size:11px">
+              <option value="">全部语言</option>
+              <option value="zh-">中文</option>
+              <option value="en-">英语</option>
+              <option value="ja-">日语</option>
+              <option value="ko-">韩语</option>
+            </select>
+            <select class="mcp-sel" id="mcp-tts-voice-filter-gender" style="width:auto;font-size:11px">
+              <option value="">全部性别</option>
+              <option value="Female">女声</option>
+              <option value="Male">男声</option>
+            </select>
+          </div>
+          <select class="mcp-sel" id="mcp-tts-voice" style="width:100%">
+            <option value="${GM_getValue('tts_voice', 'zh-CN-XiaoxiaoNeural')}">加载中...</option>
+          </select>
+          <div id="mcp-tts-voice-status" style="font-size:10px;color:#666;margin-top:4px"></div>
+        </div>
+        <div id="mcp-tts-adv" style="display:${GM_getValue('tts_provider', 'edge') !== 'edge' ? 'block' : 'none'};margin-top:8px;padding:8px;background:#1a1a28;border-radius:8px;border:1px solid #333">
+          <div style="font-size:11px;color:#888;margin-bottom:6px">OpenAI 兼容配置</div>
+          <div style="margin-bottom:6px"><label class="mcp-label">API Key</label><input class="mcp-input" id="mcp-tts-apikey" type="password" value="${GM_getValue('tts_api_key', '')}" placeholder="sk-..." style="font-size:12px" /></div>
+          <div style="margin-bottom:6px"><label class="mcp-label">Base URL</label><input class="mcp-input" id="mcp-tts-baseurl" value="${GM_getValue('tts_base_url', 'https://api.openai.com/v1')}" style="font-size:12px" /></div>
+          <div><label class="mcp-label">模型</label><input class="mcp-input" id="mcp-tts-model" value="${GM_getValue('tts_model', 'tts-1')}" placeholder="tts-1 / tts-1-hd" style="font-size:12px" /></div>
+        </div>
+      </div>
+      <div style="margin-top:8px;font-size:11px;color:#555">适配器: ${currentAdapter ? currentAdapter.name : '无'}</div>
+      <div style="margin-top:12px"><button class="mcp-btn pri" id="mcp-cfg-save">保存</button></div>
     `;
 
     secSettings.querySelector('#mcp-cfg-save').onclick = () => {
       const url = secSettings.querySelector('#mcp-cfg-url').value.trim();
       if (!url) { toast('地址不能为空', 'error'); return; }
       GM_setValue('mcp_url', url);
+      ['mcp', 'tts', 'ttsAutoPlay'].forEach(mod => {
+        const toggle = secSettings.querySelector('#mod-toggle-' + mod);
+        if (toggle) setModuleEnabled(mod, toggle.checked);
+      });
+      const providerSel = secSettings.querySelector('#mcp-tts-provider');
+      if (providerSel) GM_setValue('tts_provider', providerSel.value);
+      const voiceInput = secSettings.querySelector('#mcp-tts-voice');
+      if (voiceInput) GM_setValue('tts_voice', voiceInput.value.trim());
+      const apiKeyInput = secSettings.querySelector('#mcp-tts-apikey');
+      if (apiKeyInput) GM_setValue('tts_api_key', apiKeyInput.value.trim());
+      const baseUrlInput = secSettings.querySelector('#mcp-tts-baseurl');
+      if (baseUrlInput) GM_setValue('tts_base_url', baseUrlInput.value.trim());
+      const modelInput = secSettings.querySelector('#mcp-tts-model');
+      if (modelInput) GM_setValue('tts_model', modelInput.value.trim());
       toast('已保存', 'success');
       refreshStatus();
     };
+
+    secSettings.querySelector('#mcp-tts-provider')?.addEventListener('change', (e) => {
+      const adv = secSettings.querySelector('#mcp-tts-adv');
+      if (adv) adv.style.display = e.target.value !== 'edge' ? 'block' : 'none';
+    });
+
+    // Load Edge TTS voices — with built-in fallback list
+    (function loadVoices() {
+      const voiceSel = secSettings.querySelector('#mcp-tts-voice');
+      const localeFilter = secSettings.querySelector('#mcp-tts-voice-filter-locale');
+      const genderFilter = secSettings.querySelector('#mcp-tts-voice-filter-gender');
+      const status = secSettings.querySelector('#mcp-tts-voice-status');
+      if (!voiceSel) return;
+
+      // Built-in Chinese voices (works without server)
+      const BUILTIN_VOICES = [
+        {id:'zh-CN-XiaoxiaoNeural',gender:'Female',locale:'zh-CN'},
+        {id:'zh-CN-XiaoyiNeural',gender:'Female',locale:'zh-CN'},
+        {id:'zh-CN-YunjianNeural',gender:'Male',locale:'zh-CN'},
+        {id:'zh-CN-YunxiNeural',gender:'Male',locale:'zh-CN'},
+        {id:'zh-CN-YunxiaNeural',gender:'Male',locale:'zh-CN'},
+        {id:'zh-CN-YunyangNeural',gender:'Male',locale:'zh-CN'},
+        {id:'zh-CN-liaoning-XiaobeiNeural',gender:'Female',locale:'zh-CN-liaoning'},
+        {id:'zh-CN-shaanxi-XiaoniNeural',gender:'Female',locale:'zh-CN-shaanxi'},
+        {id:'zh-HK-HiuGaaiNeural',gender:'Female',locale:'zh-HK'},
+        {id:'zh-HK-HiuMaanNeural',gender:'Female',locale:'zh-HK'},
+        {id:'zh-HK-WanLungNeural',gender:'Male',locale:'zh-HK'},
+        {id:'zh-TW-HsiaoChenNeural',gender:'Female',locale:'zh-TW'},
+        {id:'zh-TW-YunJheNeural',gender:'Male',locale:'zh-TW'},
+        {id:'zh-TW-HsiaoYuNeural',gender:'Female',locale:'zh-TW'},
+        {id:'en-US-JennyNeural',gender:'Female',locale:'en-US'},
+        {id:'en-US-GuyNeural',gender:'Male',locale:'en-US'},
+        {id:'en-US-AriaNeural',gender:'Female',locale:'en-US'},
+        {id:'ja-JP-NanamiNeural',gender:'Female',locale:'ja-JP'},
+        {id:'ja-JP-KeitaNeural',gender:'Male',locale:'ja-JP'},
+        {id:'ko-KR-SunHiNeural',gender:'Female',locale:'ko-KR'},
+        {id:'ko-KR-InJoonNeural',gender:'Male',locale:'ko-KR'},
+      ];
+
+      let allVoices = BUILTIN_VOICES;
+      const currentVoice = GM_getValue('tts_voice', 'zh-CN-XiaoxiaoNeural');
+
+      function renderVoices() {
+        const locale = localeFilter?.value || '';
+        const gender = genderFilter?.value || '';
+        const filtered = allVoices.filter(v =>
+          (!locale || v.id.includes(locale) || v.id.startsWith(locale)) &&
+          (!gender || v.gender === gender)
+        );
+        voiceSel.innerHTML = '';
+        if (!filtered.length) {
+          voiceSel.innerHTML = '<option value="">无匹配语音</option>';
+          return;
+        }
+        for (const v of filtered) {
+          const opt = document.createElement('option');
+          opt.value = v.id;
+          const g = v.gender === 'Female' ? '♀' : '♂';
+          opt.textContent = g + ' ' + v.id;
+          if (v.id === currentVoice) opt.selected = true;
+          voiceSel.appendChild(opt);
+        }
+        status.textContent = filtered.length + ' / ' + allVoices.length + ' 个语音' + (allVoices.length > BUILTIN_VOICES.length ? '' : ' (内置列表)');
+      }
+
+      // Render builtin list immediately
+      renderVoices();
+
+      // Try loading full list from server in background
+      const url = getExtBaseUrl() + '/api/tts/voices';
+      GM_xmlhttpRequest({
+        method: 'GET', url, timeout: 10000,
+        onload: (resp) => {
+          try {
+            const data = JSON.parse(resp.responseText);
+            if (data.voices?.length) {
+              allVoices = data.voices;
+              renderVoices();
+            }
+          } catch {}
+        },
+        onerror: () => {}, ontimeout: () => {},
+      });
+
+      localeFilter?.addEventListener('change', renderVoices);
+      genderFilter?.addEventListener('change', renderVoices);
+    })();
+
+
+    // ═══════════════════════════════════════════════════════════════
+    //  TTS Button Injection — Add 🔊 to assistant messages
+    // ═══════════════════════════════════════════════════════════════
+    const _ttsSeenMessages = new WeakSet();
+    const _ttsAutoPlayContainers = new Set();
+    const _ttsAutoPlayTimers = new Map();
+
+    function injectTTSButtons() {
+      if (!getModuleEnabled('tts')) return;
+      const selectors = currentAdapter?.selectors?.assistantMessages || '.ds-markdown--block, [class*="markdown"]';
+      const messages = document.querySelectorAll(selectors);
+      messages.forEach(msg => {
+        if (msg.querySelector('.mcp-tts-btn')) return;
+        const text = msg.textContent?.trim();
+        if (!text || text.length < 10) return;
+        const isNew = !_ttsSeenMessages.has(msg);
+        _ttsSeenMessages.add(msg);
+        const container = msg.closest('[class*="message"]') || msg.parentElement || msg;
+
+        const btn = document.createElement('button');
+        btn.className = 'mcp-tts-btn';
+        btn.innerHTML = '🔊 朗读';
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          // Get fresh text (streaming may have updated it)
+          const freshText = msg.textContent?.trim() || text;
+          if (ttsClient.playing && ttsClient.currentText === freshText) {
+            ttsClient.stop();
+            btn.innerHTML = '🔊 朗读';
+            btn.classList.remove('playing', 'paused');
+            return;
+          }
+          btn.innerHTML = '⏳ 合成中...';
+          ttsClient.play(freshText).then(() => {
+            btn.innerHTML = '⏸ 暂停';
+            btn.classList.add('playing');
+            const check = setInterval(() => {
+              if (!ttsClient.playing) {
+                btn.innerHTML = '🔊 朗读';
+                btn.classList.remove('playing', 'paused');
+                clearInterval(check);
+              }
+            }, 500);
+          }).catch(err => { btn.innerHTML = '🔊 朗读'; toast('TTS 失败: ' + err.message, 'error'); });
+        };
+
+        container.style.position = 'relative';
+        btn.style.position = 'absolute';
+        btn.style.top = '4px';
+        btn.style.right = '4px';
+        btn.style.zIndex = '100';
+        container.appendChild(btn);
+
+        // Auto-play: track by container, wait for text to stabilize
+        if (isNew && getModuleEnabled('ttsAutoPlay') && !_ttsAutoPlayContainers.has(container)) {
+          _ttsAutoPlayContainers.add(container);
+          _watchTextStable(container, selectors);
+        }
+      });
+    }
+
+    // Watch a container until its text stops changing, then play TTS
+    function _watchTextStable(container, selectors) {
+      let lastLen = 0;
+      let stableCount = 0;
+      const check = setInterval(() => {
+        const md = container.querySelector(selectors.split(',').map(s => s.trim()).join(','));
+        const len = md ? md.textContent.trim().length : 0;
+        if (len > 0 && len === lastLen) {
+          stableCount++;
+        } else {
+          stableCount = 0;
+          lastLen = len;
+        }
+        // Text stable for 3 consecutive checks (1.5s) AND has content
+        if (stableCount >= 3 && lastLen > 10) {
+          clearInterval(check);
+          _ttsAutoPlayTimers.delete(container);
+          const finalText = md.textContent.trim();
+          ttsClient.play(finalText).catch(err => console.warn('Auto TTS:', err.message));
+        }
+      }, 500);
+      // Safety: stop watching after 60s
+      setTimeout(() => clearInterval(check), 60000);
+      _ttsAutoPlayTimers.set(container, check);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  MutationObserver — TTS button injection
+    // ═══════════════════════════════════════════════════════════════
+    let _uiDebounce = null;
+    const uiObserver = new MutationObserver(() => {
+      if (_uiDebounce) clearTimeout(_uiDebounce);
+      _uiDebounce = setTimeout(() => { injectTTSButtons(); }, 300);
+    });
+
+    setTimeout(() => {
+      uiObserver.observe(document.body, { childList: true, subtree: true });
+      injectTTSButtons();
+    }, 2000);
 
     // ── Auto-connect on load ──
     refreshStatus();
