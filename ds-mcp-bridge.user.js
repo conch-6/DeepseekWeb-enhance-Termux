@@ -726,14 +726,14 @@
     /* TTS Button */
     .mcp-tts-btn {
       display:inline-flex;align-items:center;gap:4px;
-      padding:3px 8px;border-radius:6px;border:1px solid #444;
-      background:#1a1a28;color:#ccc;font-size:11px;cursor:pointer;
-      transition:background .15s,border-color .15s;user-select:none;
-      margin-left:8px;vertical-align:middle;
+      padding:4px 8px;border-radius:6px;border:1px solid transparent;
+      background:transparent;color:#999;font-size:12px;cursor:pointer;
+      transition:background .15s,color .15s,border-color .15s;user-select:none;
+      white-space:nowrap;line-height:1;height:28px;box-sizing:border-box;
     }
-    .mcp-tts-btn:hover { background:#2a2a3e;border-color:#7aa2f7;color:#7aa2f7; }
-    .mcp-tts-btn.playing { background:#1a3a28;border-color:#16a34a;color:#4ade80; }
-    .mcp-tts-btn.paused { background:#3a2a18;border-color:#d97706;color:#fbbf24; }
+    .mcp-tts-btn:hover { background:#2a2a3e;color:#e0e0e0;border-color:#555; }
+    .mcp-tts-btn.playing { color:#4ade80;background:#1a3a28;border-color:#16a34a; }
+    .mcp-tts-btn.paused { color:#fbbf24;background:#3a2a18;border-color:#d97706; }
 
     /* Module toggles */
     .mcp-toggle-row { display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #2a2a3a; }
@@ -1657,24 +1657,40 @@
     const _ttsAutoPlayContainers = new Set();
     const _ttsAutoPlayTimers = new Map();
 
+    /** Find the action bar (copy/regenerate buttons area) within a message container */
+    function _findActionBar(container) {
+      // Try common class patterns first
+      const byClass = container.querySelector('[class*="action"], [class*="toolbar"], [class*="buttons"], [class*="footer"]');
+      if (byClass) return byClass;
+      // Fallback: find any element with direct button children (likely the action bar)
+      const allEls = Array.from(container.querySelectorAll('*'));
+      for (let i = allEls.length - 1; i >= 0; i--) {
+        const el = allEls[i];
+        if (el.querySelectorAll(':scope > button').length >= 1) return el;
+      }
+      return null;
+    }
+
     function injectTTSButtons() {
       if (!getModuleEnabled('tts')) return;
       const selectors = currentAdapter?.selectors?.assistantMessages || '.ds-markdown--block, [class*="markdown"]';
       const messages = document.querySelectorAll(selectors);
       messages.forEach(msg => {
-        if (msg.querySelector('.mcp-tts-btn')) return;
         const text = msg.textContent?.trim();
         if (!text || text.length < 10) return;
         const isNew = !_ttsSeenMessages.has(msg);
         _ttsSeenMessages.add(msg);
         const container = msg.closest('[class*="message"]') || msg.parentElement || msg;
 
+        // Check for existing button on the container (not just msg, since we insert into action bar)
+        if (container.querySelector('.mcp-tts-btn')) return;
+
         const btn = document.createElement('button');
         btn.className = 'mcp-tts-btn';
         btn.innerHTML = '🔊 朗读';
+        btn.title = '朗读';
         btn.onclick = (e) => {
           e.stopPropagation();
-          // Get fresh text (streaming may have updated it)
           const freshText = msg.textContent?.trim() || text;
           if (ttsClient.playing && ttsClient.currentText === freshText) {
             ttsClient.stop();
@@ -1683,6 +1699,7 @@
             return;
           }
           btn.innerHTML = '⏳ 合成中...';
+          btn.style.minWidth = (btn.offsetWidth || 56) + 'px';
           ttsClient.play(freshText).then(() => {
             btn.innerHTML = '⏸ 暂停';
             btn.classList.add('playing');
@@ -1690,18 +1707,24 @@
               if (!ttsClient.playing) {
                 btn.innerHTML = '🔊 朗读';
                 btn.classList.remove('playing', 'paused');
+                btn.style.minWidth = '';
                 clearInterval(check);
               }
             }, 500);
-          }).catch(err => { btn.innerHTML = '🔊 朗读'; toast('TTS 失败: ' + err.message, 'error'); });
+          }).catch(err => {
+            btn.innerHTML = '🔊 朗读';
+            btn.style.minWidth = '';
+            toast('TTS 失败: ' + err.message, 'error');
+          });
         };
 
-        container.style.position = 'relative';
-        btn.style.position = 'absolute';
-        btn.style.top = '4px';
-        btn.style.right = '4px';
-        btn.style.zIndex = '100';
-        container.appendChild(btn);
+        // Insert into action bar at the bottom of the message
+        const actionBar = _findActionBar(container);
+        if (actionBar) {
+          actionBar.appendChild(btn);
+        } else {
+          container.appendChild(btn);
+        }
 
         // Auto-play: track by container, wait for text to stabilize
         if (isNew && getModuleEnabled('ttsAutoPlay') && !_ttsAutoPlayContainers.has(container)) {
@@ -1740,6 +1763,8 @@
     //  MutationObserver — TTS button injection
     // ═══════════════════════════════════════════════════════════════
     let _uiDebounce = null;
+    let _isPageVisible = true;
+
     const uiObserver = new MutationObserver((mutations) => {
       let hasNewNodes = false;
       for (const m of mutations) {
@@ -1748,6 +1773,7 @@
       if (!hasNewNodes) return;
       if (_uiDebounce) clearTimeout(_uiDebounce);
       _uiDebounce = setTimeout(() => {
+        if (!_isPageVisible) return;
         const _run = () => injectTTSButtons();
         if ('requestIdleCallback' in window) {
           requestIdleCallback(_run, { timeout: 2000 });
@@ -1757,14 +1783,38 @@
       }, 1000);
     });
 
-    setTimeout(() => {
+    function _reconnectObserver() {
       const chatContainer = document.querySelector('[class*="chat-message-list"]')
         || document.querySelector('[class*="message-list"]')
         || document.querySelector('main')
         || document.body;
       uiObserver.observe(chatContainer, { childList: true, subtree: true });
+    }
+
+    setTimeout(() => {
+      _reconnectObserver();
       injectTTSButtons();
     }, 2000);
+
+    // ── Visibility change: pause/resume to prevent deferred-callback pile-up ──
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        _isPageVisible = false;
+        uiObserver.disconnect();
+        if (_uiDebounce) { clearTimeout(_uiDebounce); _uiDebounce = null; }
+        // Clear all auto-play timers so they don't pile up while hidden
+        for (const [container, timer] of _ttsAutoPlayTimers) {
+          clearInterval(timer);
+        }
+        _ttsAutoPlayTimers.clear();
+        // Stop any active TTS playback
+        if (ttsClient.playing) ttsClient.stop();
+      } else {
+        _isPageVisible = true;
+        _reconnectObserver();
+        injectTTSButtons();
+      }
+    });
 
     // ── Auto-connect on load ──
     refreshStatus();
