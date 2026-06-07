@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DS Enhance
 // @namespace    https://github.com/calendar0917/DeepseekWeb-enhance
-// @version      3.2.2
+// @version      3.2.3
 // @description  批量删除、Fork 对话、会话分类、搜索、导出、批量重命名、多提示词注入
 // @author       ds-enhance
 // @homepageURL  https://github.com/calendar0917/DeepseekWeb-enhance
@@ -181,23 +181,80 @@
   }
 
   async function fetchSessionsPage(cursor) {
-    let url = '/chat_session/fetch_page?count=50';
-    if (cursor) url += `&lte_cursor.pinned=${cursor.pinned}&lte_cursor.updated_at=${cursor.updated_at}`;
-    return api(url);
+    const params = new URLSearchParams({ count: '50' });
+    if (cursor && cursor.updated_at != null) {
+      params.set('lte_cursor.pinned', String(cursor.pinned ? 1 : 0));
+      params.set('lte_cursor.updated_at', String(cursor.updated_at));
+    }
+    return api(`/chat_session/fetch_page?${params.toString()}`);
+  }
+
+  function getSessionKey(session) {
+    return session?.id || session?.chat_session_id || session?.chatSessionId || session?.session_id || '';
+  }
+
+  function getSessionUpdatedAt(session) {
+    const candidates = [session?.updated_at, session?.updatedAt, session?.update_time, session?.updateTime];
+    for (const value of candidates) {
+      if (value == null || value === '') continue;
+      const n = Number(value);
+      if (Number.isFinite(n)) return n;
+    }
+    return null;
+  }
+
+  function normalizeSession(session) {
+    const id = getSessionKey(session);
+    const updatedAt = getSessionUpdatedAt(session);
+    const normalized = { ...session };
+    if (id && !normalized.id) normalized.id = id;
+    if (updatedAt != null && normalized.updated_at == null) normalized.updated_at = updatedAt;
+    return normalized;
+  }
+
+  function buildSessionCursor(session) {
+    const updatedAt = getSessionUpdatedAt(session);
+    if (updatedAt == null) return null;
+    return { pinned: session?.pinned ? 1 : 0, updated_at: updatedAt };
+  }
+
+  function cursorKey(cursor) {
+    return cursor ? `${cursor.pinned ? 1 : 0}:${cursor.updated_at}` : '__first__';
   }
 
   async function fetchAllSessions() {
     const sessions = [];
+    const seenIds = new Set();
+    const seenCursors = new Set();
     let cursor = null;
+
     for (let i = 0; i < 100; i++) {
+      const currentCursorKey = cursorKey(cursor);
+      if (seenCursors.has(currentCursorKey)) break;
+      seenCursors.add(currentCursorKey);
+
       const data = await fetchSessionsPage(cursor);
       const biz = data?.biz_data;
-      const list = biz?.chat_sessions || [];
-      sessions.push(...list);
+      const list = Array.isArray(biz?.chat_sessions) ? biz.chat_sessions : [];
+      let addedThisPage = 0;
+      for (const raw of list) {
+        const session = normalizeSession(raw);
+        const id = getSessionKey(session);
+        if (!id || seenIds.has(id)) continue;
+        seenIds.add(id);
+        sessions.push(session);
+        addedThisPage++;
+      }
+
       if (!biz?.has_more || !list.length) break;
-      const last = list[list.length - 1];
-      cursor = { pinned: last.pinned ? 1 : 0, updated_at: last.updated_at };
+      if (!addedThisPage) break;
+      const nextCursor = buildSessionCursor(list[list.length - 1]);
+      if (!nextCursor) break;
+      const nextCursorKey = cursorKey(nextCursor);
+      if (nextCursorKey === currentCursorKey) break;
+      cursor = nextCursor;
     }
+
     return sessions;
   }
 
@@ -1304,7 +1361,8 @@
 
     // 寻找原生按钮并动态挂载/矫正位置
     mount() {
-      const buttons = Array.from(document.querySelectorAll('div[role="button"].ds-toggle-button'));
+      const buttons = Array.from(document.querySelectorAll('.ds-toggle-button, [class*="ds-toggle-button"]'))
+        .filter(b => b.id !== this.btnId && typeof b.textContent === 'string');
       const anchorBtn = buttons.find(b =>
         b.textContent.includes('智能搜索') ||
         b.textContent.includes('深度思考') ||
@@ -1444,6 +1502,8 @@
 
   // 初始化与监听器
   InlinePromptUI.init();
+  InlinePromptUI.mount();
+  setTimeout(() => InlinePromptUI.mount(), 1000);
 
   // 添加防抖的 MutationObserver，监控并自动矫正节点位置
   let mountTimer = null;
@@ -1455,7 +1515,7 @@
   });
   domObserver.observe(document.body, { childList: true, subtree: true });
 
-  console.log('[DSE] DeepSeek Chat Enhance v3.2.2 loaded');
+  console.log('[DSE] DeepSeek Chat Enhance v3.2.3 loaded');
 
   }); // end waitForDOM
 })();

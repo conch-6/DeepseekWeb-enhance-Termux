@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DS MCP Bridge
 // @namespace    https://github.com/calendar0917/ds-enhance
-// @version      4.1.0
+// @version      4.2.0
 // @description  AI Chat 增强 — MCP 工具调用 + TTS 朗读 + 多站点适配
 // @author       ds-enhance
 // @match        https://chat.deepseek.com/*
@@ -19,7 +19,11 @@
 
   const SCRIPT_PREFIX = '[Bridge]';
   const DEFAULT_MCP_URL = 'http://localhost:8024/mcp';
-  const TOOL_CALL_RE = /```mcp:(\w+)\n([\s\S]*?)```/g;
+  const TOOL_CALL_RE = /```mcp:([\w.-]+)\n([\s\S]*?)```/g;
+  const SYSTEM_HINT_START = '[系统指令]';
+  const SYSTEM_HINT_END = '[系统指令结束]';
+  const AUTO_SEND_KEY = 'auto_send';
+  const DEFAULT_AUTO_SEND = true;
 
   // ═══════════════════════════════════════════════════════════════
   //  Module Toggles (top-level so XHR/fetch hooks can access)
@@ -27,6 +31,7 @@
   const MODULE_DEFAULTS = { mcp: true, tts: true, ttsAutoPlay: false };
   function getModuleEnabled(mod) { return GM_getValue('mod_' + mod, MODULE_DEFAULTS[mod]); }
   function setModuleEnabled(mod, val) { GM_setValue('mod_' + mod, val); }
+  function getAutoSendEnabled() { return GM_getValue(AUTO_SEND_KEY, DEFAULT_AUTO_SEND); }
 
   // ═══════════════════════════════════════════════════════════════
   //  Adapter Registry — Multi-site support
@@ -276,7 +281,7 @@
 
   function buildToolHint() {
     if (!toolRegistry.length) return '';
-    let hint = '[系统指令] 你拥有以下 MCP 工具。当用户的需求可以用工具完成时，你必须在回复中调用工具。';
+    let hint = `${SYSTEM_HINT_START} 你拥有以下 MCP 工具。当用户的需求可以用工具完成时，你必须在回复中调用工具。`;
     hint += ' 调用格式：用代码块写 ```mcp:工具名``` 后紧跟一个 JSON 代码块写参数。\n\n';
     hint += '示例：\n```mcp:execute_command\n{"command": "ls -la"}\n```\n\n';
     hint += '可用工具列表：\n';
@@ -288,6 +293,7 @@
     });
     hint += '\n如果不需要工具就正常回答。需要工具时一定要调用。';
     hint += '\n\n当收到用户发送的 <tool_result> 包裹的文本时，这是你之前调用的工具的执行结果。请基于结果继续回答用户的问题。';
+    hint += `\n${SYSTEM_HINT_END}`;
     return hint;
   }
 
@@ -297,7 +303,7 @@
       const parsed = JSON.parse(bodyStr);
       const hint = buildToolHint();
       if (!hint) return bodyStr;
-      if (bodyStr.includes('[系统指令] 你拥有以下 MCP 工具')) return bodyStr;
+      if (bodyStr.includes(`${SYSTEM_HINT_START} 你拥有以下 MCP 工具`)) return bodyStr;
 
       if (parsed.prompt && typeof parsed.prompt === 'string') {
         parsed.prompt = hint + '\n\n' + parsed.prompt;
@@ -547,10 +553,14 @@
       await sleep(200);
       setInputValue(input, wrappedText);
       await sleep(500);
+
+      if (!getAutoSendEnabled()) {
+        toast('工具结果已填入输入框', 'info');
+        return;
+      }
+
       simulateEnter(input);
       await sleep(300);
-
-      // Fallback: click send button
       const sendBtn = findSendButton();
       if (sendBtn) sendBtn.click();
 
@@ -746,6 +756,26 @@
     .mcp-switch input:checked + .slider { background:#16a34a; }
     .mcp-switch input:checked + .slider:before { transform:translateX(16px);background:#fff; }
 
+    .mcp-code-action {
+      display:inline-flex;align-items:center;justify-content:center;
+      height:24px;padding:0 8px;margin-left:4px;border-radius:5px;
+      border:1px solid #444;background:#222;color:#ddd;font-size:12px;
+      line-height:1;cursor:pointer;white-space:nowrap;box-sizing:border-box;
+    }
+    .mcp-code-action:hover { background:#333;color:#fff;border-color:#666; }
+    .mcp-code-action.resend { background:#14351f;border-color:#16a34a;color:#8df0ad; }
+    .mcp-code-action.resend:hover { background:#166534;color:#fff; }
+    pre.mcp-code-hidden, code.mcp-code-hidden, .mcp-code-hidden pre, .mcp-code-hidden code { display:none !important; }
+    .mcp-sys-fold {
+      margin:8px 0;padding:8px 10px;border:1px solid #333;border-radius:8px;
+      background:#15151f;color:#ccc;font-size:13px;line-height:1.55;
+    }
+    .mcp-sys-fold-hd { display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;user-select:none; }
+    .mcp-sys-fold-title { color:#7aa2f7;font-weight:600; }
+    .mcp-sys-fold-toggle { color:#999;font-size:12px; }
+    .mcp-sys-fold-body { display:none;margin-top:8px;white-space:pre-wrap;color:#999;font-size:12px; }
+    .mcp-sys-fold.open .mcp-sys-fold-body { display:block; }
+
   `;
 
   // ═══════════════════════════════════════════════════════════════
@@ -776,7 +806,7 @@
     panel.id = 'mcp-panel';
     panel.innerHTML = `
       <div class="hd">
-        <h3>DS MCP Bridge <span class="ver">v4.1.0</span></h3>
+        <h3>DS MCP Bridge <span class="ver">v4.2.0</span></h3>
         <button class="cls">&times;</button>
       </div>
       <div id="mcp-tabs">
@@ -1491,6 +1521,10 @@
           <label class="mcp-switch"><input type="checkbox" id="mod-toggle-mcp" ${getModuleEnabled('mcp') ? 'checked' : ''} /><span class="slider"></span></label>
         </div>
         <div class="mcp-toggle-row">
+          <div><div class="mcp-toggle-label">📨 工具结果自动发送</div><div class="mcp-toggle-desc">工具结果填入输入框后自动提交</div></div>
+          <label class="mcp-switch"><input type="checkbox" id="mcp-cfg-autosend" ${getAutoSendEnabled() ? 'checked' : ''} /><span class="slider"></span></label>
+        </div>
+        <div class="mcp-toggle-row">
           <div><div class="mcp-toggle-label">🔊 TTS 朗读</div><div class="mcp-toggle-desc">AI 回复旁显示朗读按钮</div></div>
           <label class="mcp-switch"><input type="checkbox" id="mod-toggle-tts" ${getModuleEnabled('tts') ? 'checked' : ''} /><span class="slider"></span></label>
         </div>
@@ -1548,6 +1582,8 @@
         const toggle = secSettings.querySelector('#mod-toggle-' + mod);
         if (toggle) setModuleEnabled(mod, toggle.checked);
       });
+      const autoSendToggle = secSettings.querySelector('#mcp-cfg-autosend');
+      if (autoSendToggle) GM_setValue(AUTO_SEND_KEY, autoSendToggle.checked);
       const providerSel = secSettings.querySelector('#mcp-tts-provider');
       if (providerSel) GM_setValue('tts_provider', providerSel.value);
       const voiceInput = secSettings.querySelector('#mcp-tts-voice');
@@ -1648,6 +1684,173 @@
       localeFilter?.addEventListener('change', renderVoices);
       genderFilter?.addEventListener('change', renderVoices);
     })();
+
+
+    // ═══════════════════════════════════════════════════════════════
+    //  MCP Code Block Actions + System Instruction Folding
+    // ═══════════════════════════════════════════════════════════════
+    function parseToolArgs(rawArgs) {
+      const text = (rawArgs || '').trim();
+      if (!text) return {};
+      try { return JSON.parse(text); }
+      catch { return { input: text }; }
+    }
+
+    function getMCPCodeInfo(block) {
+      const banner = block.querySelector?.('.md-code-block-banner, [class*="code-block-banner"], [class*="code-header"]');
+      const blockText = block.textContent || '';
+      const langText = banner?.textContent || '';
+      let match = langText.match(/(?:^|\s)mcp:([\w.-]+)(?:\s|$)/);
+      if (!match) match = blockText.match(/```mcp:([\w.-]+)\s*([\s\S]*?)```/);
+      if (!match) match = blockText.match(/^\s*mcp:([\w.-]+)(?:\s|$)/);
+      if (!match) return null;
+
+      const toolName = match[1];
+      let rawArgs = '';
+      if (match[2]) rawArgs = match[2].trim();
+      else {
+        const pre = block.matches?.('pre') ? block : block.querySelector?.('pre') || block.querySelector?.('code');
+        rawArgs = (pre?.innerText || pre?.textContent || '').trim();
+      }
+      rawArgs = rawArgs.replace(new RegExp(`^mcp:${toolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`, 'i'), '').trim();
+      return { toolName, rawArgs };
+    }
+
+    function getCodeActionContainer(block) {
+      const banner = block.querySelector?.('.md-code-block-banner, [class*="code-block-banner"], [class*="code-header"]');
+      if (banner) {
+        return banner.querySelector('[class*="action"], [class*="copy"], [class*="toolbar"], .efa13877') || banner;
+      }
+      const pre = block.matches?.('pre') ? block : block.querySelector?.('pre');
+      if (!pre) return null;
+      const bar = document.createElement('div');
+      bar.style.cssText = 'display:flex;justify-content:flex-end;gap:4px;margin:4px 0;';
+      pre.parentNode.insertBefore(bar, pre);
+      return bar;
+    }
+
+    function enhanceMCPCodeBlocks() {
+      const candidates = new Set();
+      document.querySelectorAll('.md-code-block, [class*="code-block"], pre').forEach(el => {
+        if (el.closest('#mcp-panel')) return;
+        candidates.add(el.closest('.md-code-block, [class*="code-block"]') || el);
+      });
+
+      candidates.forEach(block => {
+        if (!block || block.dataset?.mcpEnhanced === '1') return;
+        const info = getMCPCodeInfo(block);
+        if (!info) return;
+        const actionContainer = getCodeActionContainer(block);
+        if (!actionContainer) return;
+
+        block.dataset.mcpEnhanced = '1';
+        block.classList.add('mcp-code-hidden');
+
+        const collapseBtn = document.createElement('button');
+        collapseBtn.type = 'button';
+        collapseBtn.className = 'mcp-code-action collapse';
+        collapseBtn.textContent = '展开';
+        collapseBtn.title = '展开或折叠 MCP 指令';
+        collapseBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const hidden = block.classList.toggle('mcp-code-hidden');
+          collapseBtn.textContent = hidden ? '展开' : '折叠';
+        };
+
+        const resendBtn = document.createElement('button');
+        resendBtn.type = 'button';
+        resendBtn.className = 'mcp-code-action resend';
+        resendBtn.textContent = '重发';
+        resendBtn.title = `重新执行 ${info.toolName}`;
+        resendBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const latest = getMCPCodeInfo(block) || info;
+          executeToolCall(latest.toolName, parseToolArgs(latest.rawArgs));
+          toast(`已重发: ${latest.toolName}`, 'info');
+        };
+
+        actionContainer.appendChild(collapseBtn);
+        actionContainer.appendChild(resendBtn);
+      });
+    }
+
+    function findTightSystemInstructionElement(root) {
+      let node = root;
+      while (node?.children?.length) {
+        const children = Array.from(node.children).filter(child => {
+          if (child.closest?.('.mcp-sys-fold')) return false;
+          const text = child.textContent || '';
+          return text.includes(SYSTEM_HINT_START) && text.includes(SYSTEM_HINT_END);
+        });
+        if (children.length !== 1) break;
+        node = children[0];
+      }
+      return node;
+    }
+
+    function foldSystemInstructionElement(target) {
+      if (!target || target.dataset?.mcpSystemFolded === '1') return;
+      if (target.querySelector?.('.mcp-sys-fold')) return;
+      const text = target.textContent || '';
+      const start = text.indexOf(SYSTEM_HINT_START);
+      const endStart = text.indexOf(SYSTEM_HINT_END, start);
+      if (start < 0 || endStart < 0) return;
+
+      const end = endStart + SYSTEM_HINT_END.length;
+      const before = text.slice(0, start).trim();
+      const hidden = text.slice(start, end).trim();
+      const after = text.slice(end).trim();
+      if (hidden.length < 80) return;
+
+      const frag = document.createDocumentFragment();
+      const addTextBlock = (content) => {
+        if (!content) return;
+        const el = document.createElement('div');
+        el.style.whiteSpace = 'pre-wrap';
+        el.textContent = content;
+        frag.appendChild(el);
+      };
+
+      addTextBlock(before);
+
+      const fold = document.createElement('div');
+      fold.className = 'mcp-sys-fold';
+      fold.innerHTML = `
+        <div class="mcp-sys-fold-hd"><span class="mcp-sys-fold-title">${SYSTEM_HINT_START}</span><span class="mcp-sys-fold-toggle">展开</span></div>
+        <div class="mcp-sys-fold-body"></div>
+      `;
+      fold.querySelector('.mcp-sys-fold-body').textContent = hidden;
+      fold.querySelector('.mcp-sys-fold-hd').onclick = () => {
+        const open = fold.classList.toggle('open');
+        fold.querySelector('.mcp-sys-fold-toggle').textContent = open ? '折叠' : '展开';
+      };
+      frag.appendChild(fold);
+
+      addTextBlock(after);
+      target.dataset.mcpSystemFolded = '1';
+      target.replaceChildren(frag);
+    }
+
+    function collapseSystemInstructions() {
+      const roots = document.querySelectorAll('.ds-markdown, .ds-markdown--block, [class*="markdown"], [data-message-author-role="user"]');
+      roots.forEach(root => {
+        if (root.closest('#mcp-panel, .mcp-sys-fold')) return;
+        if (root.dataset?.mcpSystemFolded === '1' || root.querySelector?.('.mcp-sys-fold')) return;
+        const text = root.textContent || '';
+        if (!text.includes(SYSTEM_HINT_START) || !text.includes(SYSTEM_HINT_END)) return;
+        const target = findTightSystemInstructionElement(root);
+        if (!target || target === document.body || target === document.documentElement) return;
+        foldSystemInstructionElement(target);
+      });
+    }
+
+    function enhanceChatUI() {
+      enhanceMCPCodeBlocks();
+      collapseSystemInstructions();
+      injectTTSButtons();
+    }
 
 
     // ═══════════════════════════════════════════════════════════════
@@ -1774,7 +1977,7 @@
       if (_uiDebounce) clearTimeout(_uiDebounce);
       _uiDebounce = setTimeout(() => {
         if (!_isPageVisible) return;
-        const _run = () => injectTTSButtons();
+        const _run = () => enhanceChatUI();
         if ('requestIdleCallback' in window) {
           requestIdleCallback(_run, { timeout: 2000 });
         } else {
@@ -1793,7 +1996,7 @@
 
     setTimeout(() => {
       _reconnectObserver();
-      injectTTSButtons();
+      enhanceChatUI();
     }, 2000);
 
     // ── Visibility change: pause/resume to prevent deferred-callback pile-up ──
@@ -1812,7 +2015,7 @@
       } else {
         _isPageVisible = true;
         _reconnectObserver();
-        injectTTSButtons();
+        enhanceChatUI();
       }
     });
 

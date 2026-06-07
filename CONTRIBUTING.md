@@ -34,8 +34,12 @@ python server.py
 ### Running Tests
 
 ```bash
+node --check ds-enhance.user.js
+node --check ds-mcp-bridge.user.js
+node --test tests/userscript-regressions.test.js
+
 cd server
-pytest tests/ -v
+uv run --no-project --with-requirements requirements.txt pytest
 ```
 
 ### Type Checking
@@ -78,6 +82,7 @@ mypy tools/ server.py --ignore-missing-imports
 ### PR Checklist
 - [ ] Code follows style guidelines
 - [ ] Tests pass
+- [ ] Userscript syntax checks pass
 - [ ] Documentation updated if needed
 - [ ] Commit messages are clear
 
