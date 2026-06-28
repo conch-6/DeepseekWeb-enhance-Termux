@@ -1,3 +1,50 @@
+# 🚀 快速开始
+省流，新手看这里就行
+
+## 1. 下载一个有脚本功能的手机浏览器
+
+推荐[下载 Via](https://viayoo.com/zh-cn/)，简单且轻量
+
+
+## 2. 进入 Via，找到**设置**、**脚本**并进入，点击右上角加号，推荐使用**下载脚本**。
+
+按需安装即可，也可以两个都安装：
+**对话管理增强**：
+[点击查看介绍](#DS Enhance — 对话管理)
+```
+https://gh-proxy.com/https://raw.githubusercontent.com/conch-6/DeepseekWeb-enhance-Termux/main/ds-enhance.user.js
+```
+**MCP**：
+[点击查看介绍](#DS MCP Bridge — MCP 工具调用 + TTS 朗读)
+```
+https://gh-proxy.com/https://raw.githubusercontent.com/conch-6/DeepseekWeb-enhance-Termux/main/ds-mcp-bridge.user.js
+```
+
+3. 打开 chat.deepseek.com 或 chatgpt.com，页面中出现悬浮按钮即安装成功
+
+---
+
+## 运行mcp需要终端环境，推荐 [Termux](https://github.com/termux/termux-app)
+注：仅使用**对话管理增强**不使用**MCP**的话，直接跳过这一步即可，就可以直接用了。
+
+依次执行：
+```
+git clone https://github.com/conch-6/DeepseekWeb-enhance-Termux && cd DeepseekWeb-enhance-Termux
+```
+```
+cd server
+```
+```
+pip install -r requirements.txt
+```
+```
+python server.py
+```
+
+---
+
+# 以下为原仓库内容
+
 # DS Enhance
 
 多站点 AI Chat 浏览器增强工具集。包含两个独立脚本，共享基础设施。
@@ -18,7 +65,7 @@
 ---
 
 ## DS Enhance — 对话管理
-
+[返回之前阅读的位置](#2. 进入 Via，找到**设置**、**脚本**并进入，右上角加号，推荐使用**下载脚本**。)
 ### 功能
 
 | 功能 | 说明 |
@@ -50,7 +97,7 @@
 ---
 
 ## DS MCP Bridge — MCP 工具调用 + TTS 朗读
-
+[返回之前阅读的位置](#2. 进入 Via，找到**设置**、**脚本**并进入，右上角加号，推荐使用**下载脚本**。)
 让 AI Chat 具备调用本地工具的能力（执行 Shell 命令、读写文件、网络搜索等），并支持 TTS 语音朗读。
 
 ### 支持站点

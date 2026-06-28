@@ -335,6 +335,18 @@
   const style = document.createElement('style');
   style.textContent = `
     #dse-fab{position:fixed;z-index:999999;width:48px;height:48px;border-radius:50%;background:#2563eb;color:#fff;border:none;font-size:22px;cursor:grab;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 12px rgba(37,99,235,.4);user-select:none;-webkit-user-select:none;touch-action:none}
+#dse-fab:active{cursor:grabbing}
+#dse-fab:hover{transform:scale(1.1);box-shadow:0 4px 20px rgba(37,99,235,.6)}
+#dse-fab svg{width:24px;height:24px;fill:currentColor}
+#dse-panel{position:fixed;z-index:999998;width:460px;max-width:calc(100vw - 20px);max-height:75vh;background:#16161e;color:#eee;border:1px solid #333;border-radius:14px;box-shadow:0 8px 40px rgba(0,0,0,.6);font-family:system-ui;font-size:14px;display:none;flex-direction:column;overflow:hidden}
+/* 移动端适配 */
+@media (max-width: 600px) {
+  #dse-fab{width:42px;height:42px}
+  #dse-fab svg{width:20px;height:20px}
+  #dse-panel{width:100vw!important;max-width:100vw!important;left:0!important;bottom:0!important;top:auto!important;height:80vh;max-height:80vh;border-radius:14px 14px 0 0}
+  .dse-modal-box{min-width:auto!important;width:calc(100vw - 24px)!important;max-width:calc(100vw - 24px)!important}
+  .dse-bd{padding:10px}
+}
     #dse-fab:active{cursor:grabbing}
     #dse-fab:hover{transform:scale(1.1);box-shadow:0 4px 20px rgba(37,99,235,.6)}
 
@@ -404,7 +416,7 @@
 
     /* modal */
     .dse-modal-bg{position:fixed;inset:0;z-index:1000002;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center}
-    .dse-modal-box{background:#1a1a28;color:#eee;border-radius:14px;padding:0;min-width:380px;max-width:520px;box-shadow:0 8px 40px rgba(0,0,0,.6);font-family:system-ui;overflow:hidden}
+    .dse-modal-box{background:#1a1a28;color:#eee;border-radius:14px;padding:0;min-width:320px;max-width:calc(100vw - 32px);box-shadow:0 8px 40px rgba(0,0,0,.6);font-family:system-ui;overflow:hidden}
     .dse-modal-box .mhd{padding:16px 20px;border-bottom:1px solid #2a2a3a;font-size:15px;font-weight:600}
     .dse-modal-box .mbd{padding:14px 20px;max-height:360px;overflow-y:auto}
     .dse-modal-box .mft{padding:12px 20px;border-top:1px solid #2a2a3a;display:flex;justify-content:flex-end;gap:8px}
@@ -481,19 +493,28 @@
   // ═══════════════════════════════════════════════════════════════════
   //  FAB (draggable)
   // ═══════════════════════════════════════════════════════════════════
-  const fab = document.createElement('button');
-  fab.id = 'dse-fab';
-  fab.innerHTML = '&#9881;';
-  fab.title = 'DeepSeek 增强 (可拖动)';
-  document.body.appendChild(fab);
+  const FAB_POS_KEY = 'dse_fab_pos';
 
-  let fabDragged = false, fabSX, fabSY, fabOX, fabOY;
-  const DRAG_TH = 5;
+const fab = document.createElement('button');
+fab.id = 'dse-fab';
+fab.innerHTML = '<svg viewBox="0 0 500 450"><path d="M436.33,157.34C432.65,155.51 430.99,159.08 428.97,160.82C428.23,161.47 427.59,162.2 426.94,162.93C421.88,169.45 415.16,172.56 406.97,172.29C394.36,171.37 383.87,175.68 375.4,185.13C373.93,173.76 367.86,165.96 357.27,161.83C351.75,159.82 347.15,156.61 343.37,152.02C341.26,148.35 339.78,144.5 338.95,140.37C338.13,137.99 337.39,135.51 334.63,135.05C331.96,134.6 330.58,137.16 329.48,139.27C325.06,147.89 323.03,157.16 323.31,166.97C323.22,177.24 325.52,186.87 330.3,195.95C335,205.03 341.62,212.46 350.09,218.05C352.21,219.06 352.85,220.71 351.93,222.91C350.73,227.13 349.36,231.26 348.16,235.39C347.33,238.23 346.04,238.69 343.28,237.59C333.71,233.37 325.33,227.5 317.97,219.89C306.19,206.68 293.58,194.3 280.14,182.65C276.83,180.18 273.61,177.79 270.11,175.59C255.48,161.19 272.04,149.36 275.72,147.99C279.5,146.52 277.11,141.47 264.4,141.57C250.69,142.48 237.71,145.88 225.29,151.84C223.08,152.66 220.87,153.4 218.48,153.85C204.58,151.1 190.59,150.65 176.51,152.39C148.71,155.23 126.9,168.35 111.07,191.82C91.92,219.61 85.85,250.15 92.75,283.35C98.55,317.93 114.84,346.27 141.62,368.46C168.5,392.31 199.7,403.13 235.41,400.65C263.11,400.65 287.32,391.3 308.12,372.68C316.4,376.44 325.06,378.46 334.08,378.64C342.45,379.29 350.64,378.64 358.83,376.72C369.6,374.42 368.87,364.06 364.91,362.23C333.52,347.37 340.43,353.33 334.17,348.29C350.09,328.75 374.2,308.48 383.59,242.82C383.96,238.6 383.96,234.38 383.59,230.16C383.59,227.5 384.14,226.58 387,226.22C394.91,225.3 402.46,222.82 409.46,218.79C429.8,207.32 437.99,188.43 439.92,165.87C440.2,162.66 439.92,159.08 436.33,157.34ZM259.07,360.85C228.69,336.18 213.97,328.02 207.71,328.38C201.45,328.75 203.01,335.45 204.3,339.85C205.5,343.88 207.34,347.55 209.73,350.95C211.02,352.41 211.48,354.06 211.11,355.99C210.74,357.82 209.73,359.2 207.98,360.12C198.23,366.35 181.2,358.01 180.46,357.55C159.85,345.44 143.83,328.84 132.33,307.75C120.82,286.75 114.57,264.28 113.46,240.25C113.46,234.47 114.84,232.36 120.73,231.35C128.1,229.88 135.37,229.7 142.82,230.71C174.02,235.48 200.53,249.33 222.34,272.53C234.4,285.92 245.17,300.5 254.37,316C264.4,332.33 276.37,347 290.36,359.93C294.5,363.6 298.83,366.99 303.34,370.11C291.92,371.49 272.5,371.76 259.07,360.85ZM273.79,264C273.7,260.98 275.26,259.42 278.3,259.33C278.76,259.23 279.31,259.23 279.77,259.33C280.42,259.6 280.97,259.97 281.52,260.42C282.9,261.98 283.18,263.64 282.35,265.47C281.61,267.39 280.23,268.31 278.21,268.4C275.26,268.4 273.88,266.94 273.79,264ZM319.07,288.03C316.31,289.41 313.46,290.14 310.52,290.42C306.19,290.6 302.23,289.32 298.83,286.65C294.59,283.99 291.92,280.14 290.82,275.19C290.36,272.26 290.36,269.32 290.82,266.39C292.2,261.89 291,258.22 287.32,255.38C284.38,253.18 281.06,252.17 277.29,252.45C276,252.35 274.8,251.9 273.61,251.25C271.12,250.06 270.57,248.23 271.95,245.84C272.78,244.65 273.7,243.64 274.71,242.63C280.33,239.88 285.94,239.88 291.46,242.63C297.08,245.66 302.05,249.6 306.19,254.46C309.87,258.77 313.18,263.36 316.13,268.22C318.8,272.16 321.01,276.48 322.57,281.06C323.58,284.09 322.48,286.56 319.07,288.03Z"/></svg>'; // 占位SVG路径，后续自行替换
+fab.title = 'DeepSeek 增强 (可拖动)';
+document.body.appendChild(fab);
 
-  const panel = document.createElement('div');
-  panel.id = 'dse-panel';
+let fabDragged = false, fabSX, fabSY, fabOX, fabOY;
+const DRAG_TH = 5;
 
-  function posPanel() {
+const panel = document.createElement('div');
+panel.id = 'dse-panel';
+
+function posPanel() {
+    // 手机端直接靠底部全宽展示
+    if (window.innerWidth <= 600) {
+        panel.style.left = '0px';
+        panel.style.bottom = '0px';
+        panel.style.top = 'auto';
+        return;
+    }
     const r = fab.getBoundingClientRect();
     let l = r.left;
     const pw = 460;
@@ -502,33 +523,49 @@
     panel.style.left = l + 'px';
     panel.style.bottom = (window.innerHeight - r.top + 10) + 'px';
     panel.style.top = 'auto';
-  }
+}
 
-  fab.addEventListener('pointerdown', (e) => {
+fab.addEventListener('pointerdown', (e) => {
     if (e.button) return;
-    fabDragged = false; fabSX = e.clientX; fabSY = e.clientY;
+    fabDragged = false;
+    fabSX = e.clientX;
+    fabSY = e.clientY;
     const r = fab.getBoundingClientRect();
-    fabOX = e.clientX - r.left; fabOY = e.clientY - r.top;
+    fabOX = e.clientX - r.left;
+    fabOY = e.clientY - r.top;
     const mv = (e) => {
-      if (!fabDragged && Math.abs(e.clientX - fabSX) + Math.abs(e.clientY - fabSY) < DRAG_TH) return;
-      fabDragged = true;
-      fab.style.left = Math.max(0, Math.min(innerWidth - 48, e.clientX - fabOX)) + 'px';
-      fab.style.top = Math.max(0, Math.min(innerHeight - 48, e.clientY - fabOY)) + 'px';
-      fab.style.bottom = 'auto';
+        if (!fabDragged && Math.abs(e.clientX - fabSX) + Math.abs(e.clientY - fabSY) < DRAG_TH) return;
+        fabDragged = true;
+        fab.style.left = Math.max(0, Math.min(innerWidth - 48, e.clientX - fabOX)) + 'px';
+        fab.style.top = Math.max(0, Math.min(innerHeight - 48, e.clientY - fabOY)) + 'px';
+        fab.style.bottom = 'auto';
     };
     const up = () => {
-      document.removeEventListener('pointermove', mv);
-      document.removeEventListener('pointerup', up);
-      if (!fabDragged) { panel.classList.toggle('open'); if (panel.classList.contains('open')) posPanel(); }
-      else if (panel.classList.contains('open')) posPanel();
+        document.removeEventListener('pointermove', mv);
+        document.removeEventListener('pointerup', up);
+        if (!fabDragged) {
+            panel.classList.toggle('open');
+            if (panel.classList.contains('open')) posPanel();
+        } else {
+            if (panel.classList.contains('open')) posPanel();
+            // 保存位置到 localStorage
+            localStorage.setItem(FAB_POS_KEY, JSON.stringify({ left: fab.style.left, top: fab.style.top }));
+        }
     };
     document.addEventListener('pointermove', mv);
     document.addEventListener('pointerup', up);
     e.preventDefault();
-  });
+});
 
-  fab.style.left = '20px';
-  fab.style.top = (innerHeight - 68) + 'px';
+// 恢复上次位置
+const savedPos = JSON.parse(localStorage.getItem(FAB_POS_KEY) || 'null');
+if (savedPos && savedPos.left && savedPos.top) {
+    fab.style.left = savedPos.left;
+    fab.style.top = savedPos.top;
+} else {
+    fab.style.left = '20px';
+    fab.style.top = (innerHeight - 68) + 'px';
+}
 
   // ═══════════════════════════════════════════════════════════════════
   //  Panel HTML

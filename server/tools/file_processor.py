@@ -1,7 +1,14 @@
-"""File processing tools — extract structured text from uploaded files."""
+"""File processing tools — extract structured text from uploaded files.
 
+这是 server/tools/file_processor.py 的 Termux 友好版本：
+把 PyMuPDF 换成纯 Python 的 pypdf，避免在 Termux/ARM 上长时间编译。
+
+使用方式：
+1. 用 requirements-termux.txt 安装依赖
+2. 把本文件内容覆盖 server/tools/file_processor.py 中对应的 _process_pdf 函数
+   （或者直接用本文件替换原文件）
+"""
 from __future__ import annotations
-
 import csv
 import io
 import json
@@ -47,7 +54,6 @@ def _truncate(text: str, max_len: int = MAX_TEXT_LENGTH) -> tuple[str, bool]:
 def _process_text(file_bytes: bytes, filename: str, mime_type: str) -> FileResult:
     """Process plain text / markdown / JSON / CSV files."""
     result = FileResult(filename=filename, mime_type=mime_type, file_size=len(file_bytes), content_type="text")
-
     try:
         text = file_bytes.decode("utf-8")
     except UnicodeDecodeError:
@@ -61,7 +67,6 @@ def _process_text(file_bytes: bytes, filename: str, mime_type: str) -> FileResul
     if ext == "json" or mime_type == "application/json":
         try:
             parsed = json.loads(text)
-            # Pretty-print with truncation
             formatted = json.dumps(parsed, indent=2, ensure_ascii=False)
             text, result.truncated = _truncate(formatted)
             result.metadata["json_keys"] = (
@@ -78,7 +83,6 @@ def _process_text(file_bytes: bytes, filename: str, mime_type: str) -> FileResul
         result.metadata["columns"] = len(rows[0]) if rows else 0
         if rows:
             result.metadata["headers"] = rows[0]
-        # Truncate to preview lines
         preview = rows[:MAX_PREVIEW_LINES]
         lines = [",".join(row) for row in preview]
         text = "\n".join(lines)
@@ -94,44 +98,36 @@ def _process_text(file_bytes: bytes, filename: str, mime_type: str) -> FileResul
 
 
 def _process_pdf(file_bytes: bytes, filename: str, mime_type: str) -> FileResult:
-    """Extract text from PDF using pymupdf."""
+    """Extract text from PDF using pypdf (pure Python, no compilation)."""
     result = FileResult(filename=filename, mime_type=mime_type, file_size=len(file_bytes), content_type="pdf")
-
     try:
-        import pymupdf
+        from pypdf import PdfReader
     except ImportError:
-        result.text = "[错误] pymupdf 未安装。运行: pip install pymupdf"
+        result.text = "[错误] pypdf 未安装。运行: pip install pypdf"
         return result
 
     try:
-        doc = pymupdf.open(stream=file_bytes, filetype="pdf")
-        result.metadata["page_count"] = doc.page_count
-
+        doc = PdfReader(io.BytesIO(file_bytes))
+        result.metadata["page_count"] = len(doc.pages)
         pages_text = []
-        for i, page in enumerate(doc):
-            page_text = page.get_text()
+        for i, page in enumerate(doc.pages):
+            page_text = page.extract_text() or ""
             if page_text.strip():
                 pages_text.append(f"--- 第 {i + 1} 页 ---\n{page_text.strip()}")
-
         full_text = "\n\n".join(pages_text)
         result.text, result.truncated = _truncate(full_text)
         result.metadata["total_chars"] = len(full_text)
         result.metadata["pages_with_text"] = len(pages_text)
-        doc.close()
     except Exception as e:
         result.text = f"[错误] PDF 解析失败: {e}"
-
     return result
 
 
 def _process_image(file_bytes: bytes, filename: str, mime_type: str) -> FileResult:
     """Return basic info about an image file."""
     result = FileResult(filename=filename, mime_type=mime_type, file_size=len(file_bytes), content_type="image")
-
     result.metadata["file_size_kb"] = round(len(file_bytes) / 1024, 1)
     result.text = f"[图片文件] {filename} ({result.metadata['file_size_kb']} KB)"
-
-    # Try to get dimensions if PIL is available
     try:
         from PIL import Image
         img = Image.open(io.BytesIO(file_bytes))
@@ -143,11 +139,9 @@ def _process_image(file_bytes: bytes, filename: str, mime_type: str) -> FileResu
         pass
     except Exception as e:
         logger.warning(f"Image info extraction failed: {e}")
-
     return result
 
 
-# MIME type → processor mapping
 _MIME_MAP = {
     "text/plain": _process_text,
     "text/markdown": _process_text,
@@ -182,24 +176,13 @@ _PDF_EXTENSIONS = {"pdf"}
 def process_file(file_bytes: bytes, filename: str, mime_type: str = "") -> FileResult:
     """
     Process an uploaded file and return structured text content.
-
-    Supports: TXT, MD, JSON, CSV, PDF (via pymupdf), images (basic info).
-
-    Args:
-        file_bytes: Raw file bytes
-        filename: Original filename
-        mime_type: MIME type (auto-detected from extension if empty)
-
-    Returns:
-        FileResult with extracted text and metadata
+    Supports: TXT, MD, JSON, CSV, PDF (via pypdf), images (basic info).
     """
     if not file_bytes:
-        return FileResult(filename=filename, mime_type=mime_type, file_size=0, content_type="unknown",
-                          text="[错误] 文件为空")
+        return FileResult(filename=filename, mime_type=mime_type, file_size=0,
+                          content_type="unknown", text="[错误] 文件为空")
 
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-
-    # Determine processor from MIME or extension
     processor = _MIME_MAP.get(mime_type)
     if not processor:
         if ext in _TEXT_EXTENSIONS:
@@ -209,14 +192,11 @@ def process_file(file_bytes: bytes, filename: str, mime_type: str = "") -> FileR
         elif ext in _IMAGE_EXTENSIONS:
             processor = _process_image
         else:
-            # Default: try as text
             processor = _process_text
 
     logger.info(f"Processing file: {filename} ({mime_type}, {len(file_bytes)} bytes) → {processor.__name__}")
     return processor(file_bytes, filename, mime_type)
 
-
-# ─── MCP Tool Definition ──────────────────────────────────────
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
