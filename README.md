@@ -1,21 +1,22 @@
 # 🚀 快速开始
 省流，新手看这里就行
 
-## 1. 下载一个有脚本功能的手机浏览器
+## 下载一个有脚本功能的手机浏览器
 
 推荐[下载 Via](https://viayoo.com/zh-cn/)，简单且轻量
 
 
-## 2. 进入 Via，找到**设置**、**脚本**并进入，点击右上角加号，推荐使用**下载脚本**。
+## 进入 Via
+找到**设置**、**脚本**并进入，点击右上角加号，推荐使用**下载脚本**。
 
 按需安装即可，也可以两个都安装：
 **对话管理增强**：
-[点击查看介绍](#DS Enhance — 对话管理)
+[点击查看介绍](#ds-enhance-对话管理)
 ```
 https://gh-proxy.com/https://raw.githubusercontent.com/conch-6/DeepseekWeb-enhance-Termux/main/ds-enhance.user.js
 ```
 **MCP**：
-[点击查看介绍](#DS MCP Bridge — MCP 工具调用 + TTS 朗读)
+[点击查看介绍](#ds-mcp-bridge-mcp-工具调用-tts-朗读)
 ```
 https://gh-proxy.com/https://raw.githubusercontent.com/conch-6/DeepseekWeb-enhance-Termux/main/ds-mcp-bridge.user.js
 ```
@@ -65,7 +66,7 @@ python server.py
 ---
 
 ## DS Enhance — 对话管理
-[返回之前阅读的位置](#2. 进入 Via，找到**设置**、**脚本**并进入，右上角加号，推荐使用**下载脚本**。)
+[返回之前阅读的位置](#进入-via)
 ### 功能
 
 | 功能 | 说明 |
@@ -97,7 +98,7 @@ python server.py
 ---
 
 ## DS MCP Bridge — MCP 工具调用 + TTS 朗读
-[返回之前阅读的位置](#2. 进入 Via，找到**设置**、**脚本**并进入，右上角加号，推荐使用**下载脚本**。)
+[返回之前阅读的位置](#进入-via)
 让 AI Chat 具备调用本地工具的能力（执行 Shell 命令、读写文件、网络搜索等），并支持 TTS 语音朗读。
 
 ### 支持站点
