@@ -11,12 +11,12 @@
 
 按需安装即可，也可以两个都安装：
 **对话管理增强**：
-[点击查看介绍](#ds-enhance-对话管理)
+[点击查看介绍](#ds-enhance--对话管理)
 ```
 https://gh-proxy.com/https://raw.githubusercontent.com/conch-6/DeepseekWeb-enhance-Termux/main/ds-enhance.user.js
 ```
 **MCP**：
-[点击查看介绍](#ds-mcp-bridge-mcp-工具调用-tts-朗读)
+[点击查看介绍](#ds-mcp-bridge--mcp-工具调用--tts-朗读)
 ```
 https://gh-proxy.com/https://raw.githubusercontent.com/conch-6/DeepseekWeb-enhance-Termux/main/ds-mcp-bridge.user.js
 ```
